@@ -265,67 +265,60 @@ enum FaceLayout {
 
 // MARK: - Animated face
 
-/// The face shown in the live reminder. Redraws at up to 30 fps, but only
-/// while the reminder is actually on screen (about 20 seconds at a time), so
-/// it costs nothing the rest of the day. Respects Reduce Motion: faces still
-/// change expression, but nothing moves.
+/// The face shown in the live reminder. Fully animated (up to 30 fps) for a
+/// few seconds whenever it appears, changes mood or nags again; after that it
+/// settles into a calm mode that only swaps expressions a few times a second
+/// — a reminder can now wait on screen for a long time, and this keeps that
+/// nearly free on battery. Respects Reduce Motion: faces still change
+/// expression, but nothing moves.
 struct AnimatedFaceView: View {
     let mood: FaceMood
     var color: Color
+    /// Changing this (e.g. each new nag) wakes the full animation back up.
+    var wakeToken: Int = 0
+
+    /// How long the full-motion animation runs before settling down.
+    static let livelyDuration: Duration = .seconds(12)
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var start = Date()
+    @State private var calm = false
+
+    private struct WakeKey: Hashable {
+        let mood: FaceMood
+        let token: Int
+    }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
-            let frame = FaceScript.frame(
-                for: mood,
-                at: timeline.date.timeIntervalSince(start),
-                reduceMotion: reduceMotion
-            )
-            FaceView(face: frame.face, color: color)
-                .scaleEffect(x: frame.scaleX, y: frame.scaleY, anchor: .bottom)
-                .rotationEffect(.degrees(frame.rotation))
-                .offset(x: frame.dx, y: frame.dy)
+        Group {
+            if calm {
+                TimelineView(.periodic(from: start, by: 0.12)) { timeline in
+                    face(at: timeline.date, still: true)
+                }
+            } else {
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                    face(at: timeline.date, still: reduceMotion)
+                }
+            }
         }
         .frame(width: FaceLayout.faceWidth, height: FaceLayout.faceHeight)
         .offset(y: FaceLayout.offset(for: mood))
         .animation(reduceMotion ? nil : .spring(duration: 0.35), value: mood)
         .frame(width: FaceLayout.faceWidth, height: FaceLayout.windowHeight, alignment: .top)
         .allowsHitTesting(false)
-        .onChange(of: mood) { start = Date() }
-    }
-}
-
-// MARK: - Menu bar icon
-
-/// The —ω— logo as a menu bar template image (macOS tints it for light and
-/// dark menu bars automatically).
-enum StatusIcon {
-    static func image(width: CGFloat = 34) -> NSImage {
-        let logo = FaceShapes.logo
-        let box = logo.boundingBoxOfPath
-        let scale = width / box.width
-        let size = NSSize(width: ceil(width) + 2, height: max(ceil(box.height * scale) + 4, 12))
-        let image = NSImage(size: size, flipped: true) { rect in
-            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
-            ctx.translateBy(x: (rect.width - box.width * scale) / 2,
-                            y: (rect.height - box.height * scale) / 2)
-            ctx.scaleBy(x: scale, y: scale)
-            ctx.translateBy(x: -box.minX, y: -box.minY)
-            ctx.setFillColor(NSColor.black.cgColor)
-            ctx.addPath(logo)
-            ctx.fillPath(using: .evenOdd)
-            // Slightly embolden: at menu bar size the traced lines are thin.
-            ctx.setStrokeColor(NSColor.black.cgColor)
-            ctx.setLineWidth(0.6 / scale)
-            ctx.setLineJoin(.round)
-            ctx.addPath(logo)
-            ctx.strokePath()
-            return true
+        .task(id: WakeKey(mood: mood, token: wakeToken)) {
+            start = Date()
+            calm = false
+            try? await Task.sleep(for: Self.livelyDuration)
+            if !Task.isCancelled { calm = true }
         }
-        image.isTemplate = true
-        image.accessibilityDescription = "Remind Me"
-        return image
+    }
+
+    private func face(at date: Date, still: Bool) -> some View {
+        let frame = FaceScript.frame(for: mood, at: date.timeIntervalSince(start), reduceMotion: still)
+        return FaceView(face: frame.face, color: color)
+            .scaleEffect(x: frame.scaleX, y: frame.scaleY, anchor: .bottom)
+            .rotationEffect(.degrees(frame.rotation))
+            .offset(x: frame.dx, y: frame.dy)
     }
 }

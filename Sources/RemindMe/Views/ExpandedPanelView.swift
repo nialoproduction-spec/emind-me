@@ -224,7 +224,8 @@ struct ExpandedPanelView: View {
         NotificationService.shared.schedule(for: item)
         draft.text = ""
         draft.pending = nil
-        fieldFocused = true
+        // Added: the panel tucks itself away (after a beat, so the save registers).
+        ReminderPanelController.shared.closeAfterAdding()
     }
 
     private func cancelConfirmation() {

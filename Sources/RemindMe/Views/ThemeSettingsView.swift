@@ -21,6 +21,8 @@ struct ThemeSettingsView: View {
     @State private var maxReminders: Int
     @State private var intervalMinutes: Int
 
+    @State private var placement: PanelPlacement
+
     private let availableFonts = ["System"] + (NSFontManager.shared.availableFontFamilies.sorted())
 
     init(isPresented: Binding<Bool>) {
@@ -44,6 +46,8 @@ struct ThemeSettingsView: View {
         let escalation = EscalationSettingsStore.shared.settings
         _maxReminders = State(initialValue: escalation.maxReminders)
         _intervalMinutes = State(initialValue: escalation.intervalMinutes)
+
+        _placement = State(initialValue: PlacementStore.shared.settings.placement)
     }
 
     var body: some View {
@@ -57,6 +61,8 @@ struct ThemeSettingsView: View {
                 endOfDaySection
                 Divider()
                 remindersSection
+                Divider()
+                positionSection
                 Divider()
                 footerNote
                 actionButtons
@@ -142,6 +148,24 @@ struct ThemeSettingsView: View {
         }
     }
 
+    @ViewBuilder
+    private var positionSection: some View {
+        Text("Position")
+            .font(.headline)
+
+        Picker("Show reminders", selection: $placement) {
+            ForEach(PanelPlacement.allCases) { option in
+                Text(option.label).tag(option)
+            }
+        }
+        .pickerStyle(.menu)
+
+        Text("Drag the panel anywhere to save that spot as “Custom spot”.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
     private var footerNote: some View {
         Text("Reminders only fire while your Mac is awake — nothing is scheduled to wake it.")
             .font(.caption)
@@ -195,5 +219,9 @@ struct ThemeSettingsView: View {
             maxReminders: maxReminders,
             intervalMinutes: intervalMinutes
         )
+
+        var placementSettings = PlacementStore.shared.settings
+        placementSettings.placement = placement // keeps the saved custom spot
+        PlacementStore.shared.settings = placementSettings
     }
 }

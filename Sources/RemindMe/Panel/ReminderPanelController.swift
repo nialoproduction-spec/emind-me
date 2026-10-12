@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import SwiftData
+import Combine
 
 /// When the floating panel tucks itself away. It behaves like a notification:
 /// it appears when needed, stays a few seconds, and fades out on its own.
@@ -32,10 +33,12 @@ enum PanelAutoHide {
 ///
 /// Visibility follows `PanelAutoHide`: the pill appears on a menu bar click
 /// and fades out by itself; the expanded list stays while it's being used
-/// and fades out on a click elsewhere or after a quiet spell; a live reminder
-/// or the end-of-day summary fades away when it's done instead of leaving
-/// the pill stuck on screen. None of this touches reminder timing — the
-/// scheduler still decides when reminders appear and how long they stay.
+/// and fades out on a click elsewhere, after a quiet spell, or right after a
+/// new reminder is added. A live reminder stays until it's answered, then
+/// fades away instead of leaving the pill stuck on screen.
+///
+/// Position follows `PlacementStore` (a corner, a dragged custom spot, or
+/// under the menu bar icon); dragging the panel saves a custom spot.
 @MainActor
 final class ReminderPanelController: ObservableObject {
     static let shared = ReminderPanelController()
@@ -57,11 +60,15 @@ final class ReminderPanelController: ObservableObject {
     /// show doesn't take the panel off screen when it completes.
     private var visibilityGeneration = 0
 
+    /// The menu bar icon's frame on screen, for "under the menu bar icon"
+    /// placement. Supplied by the app delegate.
+    var statusItemFrame: (() -> CGRect?)?
+    private var placementObserver: AnyCancellable?
+
     private static let collapsedSize = CGSize(width: 220, height: 56)
     private static let expandedSize = CGSize(width: 320, height: 420)
     /// Face window + up to two lines of title + buttons.
     static let liveReminderSize = CGSize(width: 280, height: 204)
-    private static let originDefaultsKey = "panel.origin.v1"
 
     /// Whether the panel was already visible/expanded before something
     /// force-presented itself (a live reminder, the end-of-day summary), so
@@ -76,8 +83,7 @@ final class ReminderPanelController: ObservableObject {
     func configure(modelContainer: ModelContainer) {
         guard panel == nil else { return }
 
-        let origin = Self.restoredOrigin() ?? Self.defaultOrigin(for: Self.collapsedSize)
-        let rect = NSRect(origin: origin, size: Self.collapsedSize)
+        let rect = NSRect(origin: .zero, size: Self.collapsedSize)
 
         let newPanel = ReminderPanel(contentRect: rect)
         let content = AnyView(
@@ -91,11 +97,20 @@ final class ReminderPanelController: ObservableObject {
         panel = newPanel
         hostingView = hosting
 
-        // Persist wherever the user drags it.
+        // Dragging the panel saves that spot as the custom placement.
         NotificationCenter.default.addObserver(
             self, selector: #selector(panelDidMove),
             name: NSWindow.didMoveNotification, object: newPanel
         )
+
+        // Placement changed in Settings: move there right away if it's up.
+        placementObserver = PlacementStore.shared.$settings
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, let panel = self.panel, self.isOnScreen, !Self.isUserDragging else { return }
+                self.resize(to: panel.frame.size, animated: true)
+            }
     }
 
     var isVisible: Bool { panel?.isVisible ?? false }
@@ -110,7 +125,12 @@ final class ReminderPanelController: ObservableObject {
         let now = Date()
         if !isOnScreen {
             shownAt = now
-            if !panel.isVisible { panel.alphaValue = 0 }
+            if !panel.isVisible {
+                panel.alphaValue = 0
+                // Appear at the chosen placement (the screen or the menu bar
+                // icon may have moved since last time).
+                panel.setFrame(targetFrame(for: panel.frame.size), display: false)
+            }
             panel.orderFrontRegardless()
         }
         isHiding = false
@@ -149,10 +169,29 @@ final class ReminderPanelController: ObservableObject {
     }
 
     /// Menu bar click: show the pill (it then hides itself), or put the
-    /// panel away if it's already up.
+    /// panel away if it's already up. A reminder waiting for an answer is
+    /// never put away this way — the click brings it to the front instead.
     func toggleVisibility() {
         guard panel != nil else { return }
-        if isOnScreen { hide() } else { show() }
+        if isOverlayActive {
+            show()
+        } else if isOnScreen {
+            hide()
+        } else {
+            show()
+        }
+    }
+
+    /// Right after a new reminder is saved: let the confirmation register for
+    /// a moment, then fade away — unless they've already started typing the
+    /// next one.
+    func closeAfterAdding() {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(450))
+            guard let self, !self.isOverlayActive,
+                  PanelDraft.shared.text.isEmpty, PanelDraft.shared.pending == nil else { return }
+            self.hide()
+        }
     }
 
     /// Typing in the panel counts as using it, even with the pointer elsewhere.
@@ -229,8 +268,8 @@ final class ReminderPanelController: ObservableObject {
     }
 
     /// Animates between the collapsed pill and the expanded reminder list,
-    /// keeping the top-left corner anchored so growth never jumps the panel
-    /// to an unexpected part of the screen.
+    /// keeping the chosen corner (or the spot under the menu bar icon)
+    /// anchored so growth never jumps the panel somewhere unexpected.
     func setExpanded(_ expanded: Bool, animated: Bool = true) {
         guard let panel, isExpanded != expanded else { return }
         isExpanded = expanded
@@ -239,13 +278,7 @@ final class ReminderPanelController: ObservableObject {
         if !expanded { shownAt = now } // collapsed back to the pill: it peeks, then goes
 
         let size = expanded ? Self.expandedSize : Self.collapsedSize
-        let currentFrame = panel.frame
-        let newOrigin = NSPoint(
-            x: currentFrame.minX,
-            y: currentFrame.maxY - size.height
-        )
-        var newFrame = NSRect(origin: newOrigin, size: size)
-        newFrame = Self.clampedToVisibleScreen(newFrame)
+        let newFrame = targetFrame(for: size)
 
         if animated {
             NSAnimationContext.runAnimationGroup { context in
@@ -272,6 +305,12 @@ final class ReminderPanelController: ObservableObject {
 
     func dismissLiveReminder() {
         restoreStateAfterOverlay()
+    }
+
+    /// A Focus / full-screen app started while a reminder waits: fade it out
+    /// but keep everything as is, so `presentLiveReminder` brings it back.
+    func suspendLiveReminder() {
+        hide()
     }
 
     /// Same idea, sized for the end-of-day summary (reuses the expanded size).
@@ -329,9 +368,7 @@ final class ReminderPanelController: ObservableObject {
 
     private func resize(to size: CGSize, animated: Bool) {
         guard let panel else { return }
-        let currentFrame = panel.frame
-        let newOrigin = NSPoint(x: currentFrame.minX, y: currentFrame.maxY - size.height)
-        let newFrame = Self.clampedToVisibleScreen(NSRect(origin: newOrigin, size: size))
+        let newFrame = targetFrame(for: size)
 
         if animated {
             NSAnimationContext.runAnimationGroup { context in
@@ -344,32 +381,45 @@ final class ReminderPanelController: ObservableObject {
         }
     }
 
-    // MARK: - Position persistence
+    // MARK: - Placement
+
+    /// Where a panel of `size` belongs right now, per the placement setting.
+    private func targetFrame(for size: CGSize) -> NSRect {
+        let settings = PlacementStore.shared.settings
+        let iconFrame = statusItemFrame?()
+        return PanelPlacementMath.frame(
+            for: settings.placement,
+            size: size,
+            visibleFrame: Self.screenFrame(for: settings, iconFrame: iconFrame),
+            customTopLeft: settings.customTopLeft,
+            statusItemFrame: iconFrame
+        )
+    }
+
+    /// The screen to place on: the one with the menu bar icon or the custom
+    /// spot when that's the placement, otherwise the main screen.
+    private static func screenFrame(for settings: PlacementSettings, iconFrame: CGRect?) -> CGRect {
+        let screens = NSScreen.screens
+        func screen(containing point: CGPoint) -> NSScreen? {
+            screens.first { $0.frame.contains(point) }
+        }
+        var chosen: NSScreen?
+        switch settings.placement {
+        case .menuBar:
+            chosen = iconFrame.flatMap { screen(containing: CGPoint(x: $0.midX, y: $0.midY)) }
+        case .custom:
+            chosen = settings.customTopLeft.flatMap { screen(containing: CGPoint(x: $0.x + 1, y: $0.y - 1)) }
+        default:
+            break
+        }
+        return (chosen ?? NSScreen.main ?? screens.first)?.visibleFrame ?? .zero
+    }
+
+    /// Only moves made by the user dragging (mouse button held) count.
+    private static var isUserDragging: Bool { NSEvent.pressedMouseButtons & 1 == 1 }
 
     @objc private func panelDidMove() {
-        guard let panel else { return }
-        let point = panel.frame.origin
-        UserDefaults.standard.set(["x": point.x, "y": point.y], forKey: Self.originDefaultsKey)
-    }
-
-    private static func restoredOrigin() -> NSPoint? {
-        guard let dict = UserDefaults.standard.dictionary(forKey: originDefaultsKey),
-              let x = dict["x"] as? Double, let y = dict["y"] as? Double else { return nil }
-        return NSPoint(x: x, y: y)
-    }
-
-    private static func defaultOrigin(for size: CGSize) -> NSPoint {
-        guard let screen = NSScreen.main?.visibleFrame else { return .zero }
-        // Top-right-ish, out of the way of most menu bar items.
-        return NSPoint(x: screen.maxX - size.width - 24, y: screen.maxY - size.height - 12)
-    }
-
-    private static func clampedToVisibleScreen(_ frame: NSRect) -> NSRect {
-        guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(frame) })?.visibleFrame
-            ?? NSScreen.main?.visibleFrame else { return frame }
-        var result = frame
-        result.origin.x = min(max(result.origin.x, screen.minX), screen.maxX - result.width)
-        result.origin.y = min(max(result.origin.y, screen.minY), screen.maxY - result.height)
-        return result
+        guard let panel, Self.isUserDragging else { return }
+        PlacementStore.shared.pinCustom(topLeft: CGPoint(x: panel.frame.minX, y: panel.frame.maxY))
     }
 }

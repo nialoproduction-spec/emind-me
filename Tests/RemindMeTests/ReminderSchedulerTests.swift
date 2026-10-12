@@ -7,15 +7,17 @@ import SwiftData
 final class FakePresenter: LiveReminderPresenting {
     var liveShown = 0
     var liveDismissed = 0
+    var liveSuspended = 0
     var overlayShown = 0
     func presentLiveReminder() { liveShown += 1 }
     func dismissLiveReminder() { liveDismissed += 1 }
+    func suspendLiveReminder() { liveSuspended += 1 }
     func presentOverlay() { overlayShown += 1 }
     func dismissOverlay() {}
 }
 
-/// The reliability-critical part: firing, escalation, snooze, sleep catch-up
-/// and Focus suppression, driven by a fake clock so minutes pass instantly.
+/// The reliability-critical part: firing, nagging, snooze, sleep catch-up and
+/// Focus handling, driven by a fake clock so minutes pass instantly.
 @MainActor
 final class ReminderSchedulerTests: XCTestCase {
     private var container: ModelContainer!
@@ -49,8 +51,8 @@ final class ReminderSchedulerTests: XCTestCase {
     private func advance(minutes: Double) { clock = clock.addingTimeInterval(minutes * 60) }
 
     @discardableResult
-    private func addRepeating(everyMinutes: Double, dueIn minutes: Double = 0) -> Item {
-        let item = Item(title: "Drink water", kind: .repeatingRoutine, intervalSeconds: everyMinutes * 60)
+    private func addRepeating(everyMinutes: Double, dueIn minutes: Double = 0, title: String = "Drink water") -> Item {
+        let item = Item(title: title, kind: .repeatingRoutine, intervalSeconds: everyMinutes * 60)
         item.nextFireDate = clock.addingTimeInterval(minutes * 60)
         context.insert(item)
         return item
@@ -59,9 +61,6 @@ final class ReminderSchedulerTests: XCTestCase {
     private func occurrences() -> [Occurrence] {
         (try? context.fetch(FetchDescriptor<Occurrence>())) ?? []
     }
-
-    /// Nobody answered — the panel auto-collapses but the reminder stays pending.
-    private func ignore() { scheduler.collapseWithoutResolving() }
 
     // MARK: - Firing
 
@@ -100,63 +99,86 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertEqual(presenter.liveShown, 0)
     }
 
-    // MARK: - Escalation (your 3 pops, 15 minutes apart by default)
+    // MARK: - Stays until answered
 
-    func testUnansweredReminderPopsThreeTimesThenGoesUnfinished() throws {
+    func testReminderStaysOnScreenUntilAnswered() throws {
+        try makeFixture()
+        addRepeating(everyMinutes: 600)
+        scheduler.tick()
+        for _ in 0..<24 { advance(minutes: 5); scheduler.tick() } // two hours, nobody answers
+        XCTAssertNotNil(scheduler.activeOccurrence, "never closes on its own")
+        XCTAssertEqual(presenter.liveDismissed, 0)
+    }
+
+    func testUnansweredReminderNagsInPlaceThenCountsAsUnfinished() throws {
         try makeFixture()
         addRepeating(everyMinutes: 600)       // long interval so only one occurrence is in play
-        scheduler.tick()                      // pop 1
-        ignore()
+        scheduler.tick()                      // shown (1)
+        let shown = scheduler.activeOccurrence
 
         advance(minutes: 14); scheduler.tick()
-        XCTAssertEqual(presenter.liveShown, 1, "must not re-pop before 15 minutes")
+        XCTAssertEqual(presenter.liveShown, 1, "no nag before 15 minutes")
 
-        advance(minutes: 1.1); scheduler.tick() // pop 2 at 15m
-        ignore()
-        advance(minutes: 15.1); scheduler.tick() // pop 3 at 30m
-        ignore()
+        advance(minutes: 1.1); scheduler.tick() // nag 2 at 15m
+        advance(minutes: 15.1); scheduler.tick() // nag 3 at 30m
         XCTAssertEqual(presenter.liveShown, 3)
-        XCTAssertEqual(occurrences().first?.status, .pending)
+        XCTAssertEqual(occurrences().first?.remindersSentCount, 3)
 
-        advance(minutes: 15.1); scheduler.tick() // 45m: gives up
-        XCTAssertEqual(presenter.liveShown, 3, "no 4th pop")
-        XCTAssertEqual(occurrences().first?.status, .unfinished)
-        XCTAssertNil(occurrences().first?.nextEscalationAt)
+        advance(minutes: 15.1); scheduler.tick() // 45m: out of nags
+        XCTAssertEqual(occurrences().first?.status, .unfinished, "counts as unfinished for the day")
+        XCTAssertEqual(scheduler.activeOccurrence?.id, shown?.id, "but stays on screen to be answered")
+        XCTAssertEqual(presenter.liveDismissed, 0)
 
         advance(minutes: 60); scheduler.tick()
-        XCTAssertEqual(presenter.liveShown, 3, "stops nagging for good")
+        XCTAssertEqual(presenter.liveShown, 3, "and stops nagging")
+    }
+
+    func testMoodRisesWithEachNag() throws {
+        try makeFixture()
+        addRepeating(everyMinutes: 600)
+        func mood() -> FaceMood {
+            FaceMood.forPop(count: scheduler.activeOccurrence!.remindersSentCount, maxPops: escalation.maxReminders)
+        }
+        scheduler.tick()
+        XCTAssertEqual(mood(), .gentle)
+        advance(minutes: 15.1); scheduler.tick()
+        XCTAssertEqual(mood(), .nudge)
+        advance(minutes: 15.1); scheduler.tick()
+        XCTAssertEqual(mood(), .urgent)
     }
 
     func testCustomEscalationSettingsAreRespected() throws {
         try makeFixture()
         escalation = EscalationSettings(maxReminders: 2, intervalMinutes: 5)
         addRepeating(everyMinutes: 600)
-        scheduler.tick(); ignore()                        // pop 1
-        advance(minutes: 5.1); scheduler.tick(); ignore() // pop 2
-        advance(minutes: 5.1); scheduler.tick()           // out of pops
+        scheduler.tick()                         // 1
+        advance(minutes: 5.1); scheduler.tick()  // 2
+        advance(minutes: 5.1); scheduler.tick()  // out of nags
         XCTAssertEqual(presenter.liveShown, 2)
         XCTAssertEqual(occurrences().first?.status, .unfinished)
     }
 
     // MARK: - The three buttons
 
-    func testDoneStopsTheNagging() throws {
+    func testDoneClosesItAndStopsTheNagging() throws {
         try makeFixture()
         addRepeating(everyMinutes: 600)
         scheduler.tick()
         scheduler.markDone()
         XCTAssertEqual(occurrences().first?.status, .done)
         XCTAssertNil(scheduler.activeOccurrence)
+        XCTAssertEqual(presenter.liveDismissed, 1)
         advance(minutes: 30); scheduler.tick()
         XCTAssertEqual(presenter.liveShown, 1)
     }
 
-    func testSkipStopsTheNagging() throws {
+    func testSkipClosesItAndStopsTheNagging() throws {
         try makeFixture()
         addRepeating(everyMinutes: 600)
         scheduler.tick()
         scheduler.skip()
         XCTAssertEqual(occurrences().first?.status, .skipped)
+        XCTAssertEqual(presenter.liveDismissed, 1)
         advance(minutes: 30); scheduler.tick()
         XCTAssertEqual(presenter.liveShown, 1)
     }
@@ -166,23 +188,51 @@ final class ReminderSchedulerTests: XCTestCase {
         addRepeating(everyMinutes: 600)
         scheduler.tick()
         scheduler.snooze()
+        XCTAssertNil(scheduler.activeOccurrence)
         advance(minutes: 4.9); scheduler.tick()
         XCTAssertEqual(presenter.liveShown, 1, "not before 5 minutes")
         advance(minutes: 0.2); scheduler.tick()
         XCTAssertEqual(presenter.liveShown, 2, "back after 5 minutes")
     }
 
-    func testSnoozeOnTheLastPopStillComesBack() throws {
+    func testSnoozeOnTheLastNagStillComesBack() throws {
         try makeFixture()
         addRepeating(everyMinutes: 600)
-        scheduler.tick(); ignore()                          // pop 1
-        advance(minutes: 15.1); scheduler.tick(); ignore()  // pop 2
-        advance(minutes: 15.1); scheduler.tick()            // pop 3 (last)
+        scheduler.tick()                          // 1
+        advance(minutes: 15.1); scheduler.tick()  // 2
+        advance(minutes: 15.1); scheduler.tick()  // 3 (last)
         scheduler.snooze()
 
         advance(minutes: 5.1); scheduler.tick()
-        XCTAssertEqual(presenter.liveShown, 4, "a snooze must always re-pop")
+        XCTAssertEqual(presenter.liveShown, 4, "a snooze must always come back")
         XCTAssertEqual(occurrences().first?.status, .pending)
+    }
+
+    func testAnsweringAfterItWentUnfinishedStillWorks() throws {
+        try makeFixture()
+        addRepeating(everyMinutes: 600)
+        scheduler.tick()
+        advance(minutes: 15.1); scheduler.tick()
+        advance(minutes: 15.1); scheduler.tick()
+        advance(minutes: 15.1); scheduler.tick()
+        XCTAssertEqual(occurrences().first?.status, .unfinished)
+
+        scheduler.markDone()
+        XCTAssertEqual(occurrences().first?.status, .done, "late Done still counts")
+        XCTAssertNil(scheduler.activeOccurrence)
+    }
+
+    func testSnoozingAnUnfinishedReminderPutsItBackInPlay() throws {
+        try makeFixture()
+        addRepeating(everyMinutes: 600)
+        scheduler.tick()
+        advance(minutes: 15.1); scheduler.tick()
+        advance(minutes: 15.1); scheduler.tick()
+        advance(minutes: 15.1); scheduler.tick()
+        scheduler.snooze()
+        XCTAssertEqual(occurrences().first?.status, .pending)
+        advance(minutes: 5.1); scheduler.tick()
+        XCTAssertEqual(presenter.liveShown, 4)
     }
 
     // MARK: - Sleep / wake
@@ -214,17 +264,54 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertEqual(occurrences().first?.remindersSentCount, 1)
     }
 
+    func testWaitingReminderTucksAwayDuringFocusAndComesBack() throws {
+        try makeFixture()
+        addRepeating(everyMinutes: 600)
+        scheduler.tick()                                   // on screen
+
+        suppressed = true
+        scheduler.tick()
+        XCTAssertEqual(presenter.liveSuspended, 1, "hidden while the Focus is on")
+        XCTAssertTrue(scheduler.isLiveReminderSuspended)
+        XCTAssertNotNil(scheduler.activeOccurrence, "hidden, not dropped")
+
+        advance(minutes: 15.1); scheduler.tick()
+        XCTAssertEqual(occurrences().first?.remindersSentCount, 1, "no nag spent during the Focus")
+
+        suppressed = false
+        scheduler.tick()
+        XCTAssertEqual(presenter.liveShown, 2, "back when the Focus ends")
+        XCTAssertFalse(scheduler.isLiveReminderSuspended)
+
+        advance(minutes: 1); scheduler.tick()
+        XCTAssertEqual(occurrences().first?.remindersSentCount, 2, "then the delayed nag happens")
+    }
+
+    // MARK: - More than one due
+
     func testTwoDueAtOnceShowOneAtATime() throws {
         try makeFixture()
         addRepeating(everyMinutes: 600)
-        let second = Item(title: "Stretch", kind: .repeatingRoutine, intervalSeconds: 600 * 60)
-        second.nextFireDate = clock
-        context.insert(second)
+        addRepeating(everyMinutes: 600, title: "Stretch")
 
         scheduler.tick()
         XCTAssertEqual(presenter.liveShown, 1, "never two reminders on screen at once")
         scheduler.markDone()
         advance(minutes: 1); scheduler.tick()
         XCTAssertEqual(presenter.liveShown, 2, "the second one gets its turn")
+    }
+
+    func testNextReminderWaitsWhileOneIsUnanswered() throws {
+        try makeFixture()
+        addRepeating(everyMinutes: 600, title: "Drink water")
+        addRepeating(everyMinutes: 600, dueIn: 10, title: "Stretch")
+        scheduler.tick()
+        let first = scheduler.activeOccurrence
+        for _ in 0..<8 { advance(minutes: 5); scheduler.tick() }
+        XCTAssertEqual(scheduler.activeOccurrence?.id, first?.id, "Stretch waits its turn")
+
+        scheduler.markDone()
+        advance(minutes: 1); scheduler.tick()
+        XCTAssertEqual(scheduler.activeOccurrence?.item?.title, "Stretch")
     }
 }

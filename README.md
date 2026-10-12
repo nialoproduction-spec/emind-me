@@ -74,18 +74,27 @@ xcrun stapler staple "dist/Remind Me.dmg"
   never activates the app or steals focus from whatever app is frontmost.
   Collapse/expand is an animated `NSPanel.setFrame`, anchored at the
   top-left corner so growing never jumps the panel somewhere unexpected.
-- **Auto-hide** (`PanelAutoHide`) — the panel behaves like a notification,
-  fading in and out (0.18s / 0.3s) instead of staying on screen:
+- **Auto-hide** (`PanelAutoHide`) — the panel fades in and out
+  (0.18s / 0.3s) instead of sitting on screen:
   - The time / next-reminder pill appears on a menu bar click and fades
-    out after 6 seconds; it stays while the pointer is on it and goes 2
-    seconds after the pointer leaves. A click anywhere else hides it at once.
-  - The expanded list stays while it's being used, and fades out on a click
-    elsewhere or after 15 seconds with no pointer or typing. Never while the
-    settings sheet is open. Half-typed text and a pending confirmation are
-    kept (`PanelDraft`) and are still there next time.
-  - A live reminder or the end-of-day summary fades away when it's done
-    rather than leaving the pill stuck; if the list was open when a reminder
-    interrupted, it goes back to the list. Reminder timing is untouched.
+    out after 6 seconds (stays while hovered; a click elsewhere hides it).
+  - The expanded list stays while it's being used and fades out on a click
+    elsewhere, after 15 seconds idle, or right after a new reminder is
+    saved. Half-typed text is kept (`PanelDraft`) for next time.
+  - A live reminder **stays until Done, Snooze or Skip**. While it waits it
+    nags in place (the face's mood steps up and the panel comes forward,
+    count and gap from Settings); after the last nag it's counted as
+    unfinished for the day but stays on screen to be answered. During a
+    Focus or a full-screen app it's tucked away and comes back afterwards.
+    Clicking the menu bar icon brings it forward rather than hiding it.
+- **Placement** (`PanelPlacement`, Settings → Position) — top right
+  (default), top left, bottom right, bottom left, a custom spot (drag the
+  panel anywhere to save it), or under the menu bar icon like a drop-down.
+  Resizing keeps the chosen corner anchored.
+- **Menu bar icon** (`MenuBarFace`) — the —ω— logo. Hover it and it wakes up
+  with a random little reaction (happy, shocked, scared, silly, shy, dizzy,
+  smug, huffy), then goes back to the logo. While a reminder is waiting it
+  shows that reminder's mood face, so it's obvious something's due.
 - **Storage** (`Item`, `PersistenceController`) — a SwiftData `@Model`
   covering all three kinds, local `ModelConfiguration` with
   `cloudKitDatabase: .none`.
@@ -120,8 +129,8 @@ xcrun stapler staple "dist/Remind Me.dmg"
   (happy hop, dozing off, crying) before the panel closes. Line art takes
   the theme's text colour; tears stay brown. Honours Reduce Motion.
 - **Logo** — the —ω— face (`Design/logo.png`) is the app icon
-  (`Resources/AppIcon.icns`) and the menu bar icon (a template image, so it
-  follows light/dark menu bars).
+  (`Resources/AppIcon.icns`) and the idle menu bar icon (a template image,
+  so it follows light/dark menu bars).
 - **End of day** (`EndOfDaySettings`, `EndOfDaySummaryView`) — optional,
   off by default. At the chosen time: completion count, unfinished items,
   one-tap reschedule for today.

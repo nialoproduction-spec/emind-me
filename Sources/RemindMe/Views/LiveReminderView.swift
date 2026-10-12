@@ -1,12 +1,12 @@
 import SwiftUI
 
 /// Force-shown when a routine's time arrives: an animated face, the title,
-/// and three buttons. If none are tapped, `ReminderScheduler` keeps popping
-/// this back up (count and gap set in Settings) until one is.
+/// and three buttons. It stays until one of them is tapped; while it waits,
+/// `ReminderScheduler` nags in place (count and gap set in Settings).
 ///
-/// The face's mood rises with each unanswered pop — cute on the first,
-/// pouty in the middle, angry on the last — and each button gets a short
-/// reaction (happy hop / dozing off / crying) before the panel closes.
+/// The face's mood rises with each nag — cute on the first, pouty in the
+/// middle, angry on the last — and each button gets a short reaction (happy
+/// hop / dozing off / crying) before the panel closes.
 struct LiveReminderView: View {
     let occurrence: Occurrence
     let theme: PanelTheme
@@ -33,7 +33,7 @@ struct LiveReminderView: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            AnimatedFaceView(mood: mood, color: theme.text)
+            AnimatedFaceView(mood: mood, color: theme.text, wakeToken: occurrence.remindersSentCount)
 
             Text(occurrence.item?.title ?? "Reminder")
                 .font(theme.titleFont)
@@ -59,12 +59,9 @@ struct LiveReminderView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// Plays the reaction face, then performs the action. The panel's
-    /// auto-collapse is paused first so it can't close mid-reaction and lose
-    /// the tap.
+    /// Plays the reaction face, then performs the action.
     private func respond(with reactionMood: FaceMood, then action: @escaping () -> Void) {
         guard reaction == nil else { return }
-        scheduler.holdForReaction()
         reaction = reactionMood
         Task { @MainActor in
             try? await Task.sleep(for: Self.reactionDuration)

@@ -8,8 +8,13 @@ import AppKit
 /// tests swap in a fake so the timing logic runs without any windows.
 @MainActor
 protocol LiveReminderPresenting: AnyObject {
+    /// Show the reminder (or bring it forward again for a nag).
     func presentLiveReminder()
+    /// The reminder was answered: put it away.
     func dismissLiveReminder()
+    /// Tuck an unanswered reminder out of sight during a Focus / full-screen
+    /// app; `presentLiveReminder` brings it back.
+    func suspendLiveReminder()
     func presentOverlay()
     func dismissOverlay()
 }
@@ -20,6 +25,13 @@ extension ReminderPanelController: LiveReminderPresenting {}
 /// live reminder, the escalation (count and interval are user-adjustable in
 /// Settings — see `EscalationSettings`), snooze/done/skip, and the
 /// end-of-day summary trigger.
+///
+/// A live reminder stays on screen until it's answered with Done, Snooze or
+/// Skip. While it waits, each escalation step nags in place: the face's mood
+/// steps up and the panel comes forward. After the last step it's counted as
+/// unfinished for the day (and stops nagging) but is still on screen to be
+/// answered. During a Focus or a full-screen app it's tucked away, and comes
+/// back when that ends.
 ///
 /// Reliability design: every due time is an absolute `Date` stored on the
 /// model (`Item.nextFireDate`, `Occurrence.nextEscalationAt`), never a
@@ -35,20 +47,22 @@ extension ReminderPanelController: LiveReminderPresenting {}
 final class ReminderScheduler: ObservableObject {
     static let shared = ReminderScheduler()
 
-    /// Non-nil while the live reminder (Done / Snooze / Skip) is on screen.
+    /// Non-nil while a live reminder (Done / Snooze / Skip) is waiting for an
+    /// answer. Re-published on every nag so observers see the new mood.
     @Published private(set) var activeOccurrence: Occurrence?
+    /// True while the waiting reminder is tucked away for a Focus / full screen.
+    @Published private(set) var isLiveReminderSuspended = false
     /// Flips true when it's time to show the end-of-day summary.
     @Published var showEndOfDaySummary = false
 
     private var modelContext: ModelContext?
     private var tickTimer: Timer?
     private var wakeObserver: NSObjectProtocol?
-    private var autoCollapseTask: Task<Void, Never>?
+    private var spaceObserver: NSObjectProtocol?
 
     private let tickInterval: TimeInterval = 20
     let snoozeInterval: TimeInterval = 5 * 60
     let suppressedRetryInterval: TimeInterval = 45
-    private let liveReminderVisibleDuration: TimeInterval = 20
 
     // Injected so tests can drive time, the screen, and settings directly.
     private let presenter: LiveReminderPresenting
@@ -82,6 +96,14 @@ final class ReminderScheduler: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
+        // Full-screen apps live in their own Space: re-check right away when
+        // the Space changes, so a waiting reminder tucks away (or comes back)
+        // promptly instead of on the next 20-second tick.
+        spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.tick() }
+        }
         tick() // catch up on anything due since the app last ran
     }
 
@@ -106,6 +128,8 @@ final class ReminderScheduler: ObservableObject {
     func tick() {
         guard let modelContext else { return }
         let now = clock()
+        let suppressed = shouldSuppress()
+        updateSuspension(suppressed: suppressed)
 
         let items = (try? modelContext.fetch(FetchDescriptor<Item>())) ?? []
         let allOccurrences = (try? modelContext.fetch(FetchDescriptor<Occurrence>())) ?? []
@@ -125,7 +149,9 @@ final class ReminderScheduler: ObservableObject {
             if let occurrence = pendingByItemID[item.id] {
                 guard let nextEscalation = occurrence.nextEscalationAt, nextEscalation <= now else { continue }
                 if occurrence.remindersSentCount >= escalation.maxReminders {
-                    finalizeUnfinished(occurrence)
+                    finalizeUnfinished(occurrence) // if it's the one on screen, it stays there
+                } else if occurrence.id == activeOccurrence?.id {
+                    nagInPlace(occurrence, suppressed: suppressed)
                 } else {
                     attemptPresent(occurrence)
                 }
@@ -172,29 +198,47 @@ final class ReminderScheduler: ObservableObject {
 
     private func present(_ occurrence: Occurrence) {
         activeOccurrence = occurrence
+        isLiveReminderSuspended = false
         presenter.presentLiveReminder()
+        // No auto-close: it stays until Done, Snooze or Skip.
+    }
 
-        autoCollapseTask?.cancel()
-        let visibleFor = liveReminderVisibleDuration
-        autoCollapseTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(visibleFor))
-            guard let self, !Task.isCancelled, self.activeOccurrence?.id == occurrence.id else { return }
-            self.collapseWithoutResolving()
+    /// The reminder is still on screen, unanswered, and the next escalation
+    /// step is due: nag in place. The count goes up (so the face's mood steps
+    /// up) and the panel comes forward. During a Focus / full screen it waits
+    /// instead, without using up a step.
+    private func nagInPlace(_ occurrence: Occurrence, suppressed: Bool) {
+        let current = clock()
+        guard !suppressed else {
+            occurrence.nextEscalationAt = current.addingTimeInterval(suppressedRetryInterval)
+            return
+        }
+        occurrence.remindersSentCount += 1
+        occurrence.nextEscalationAt = current.addingTimeInterval(TimeInterval(escalation.intervalMinutes * 60))
+        activeOccurrence = occurrence // re-publish: the menu bar face picks up the new mood
+        presenter.presentLiveReminder()
+    }
+
+    /// Tuck the waiting reminder away while a Focus / full-screen app is up,
+    /// and bring it back after. It's never dropped — only hidden.
+    private func updateSuspension(suppressed: Bool) {
+        guard activeOccurrence != nil else {
+            isLiveReminderSuspended = false
+            return
+        }
+        if suppressed, !isLiveReminderSuspended {
+            isLiveReminderSuspended = true
+            presenter.suspendLiveReminder()
+        } else if !suppressed, isLiveReminderSuspended {
+            isLiveReminderSuspended = false
+            presenter.presentLiveReminder()
         }
     }
 
-    /// A button was tapped: stop the auto-collapse so the panel stays up for
-    /// the short reaction animation and the tap isn't lost if the 20-second
-    /// timer happens to run out mid-reaction.
-    func holdForReaction() {
-        autoCollapseTask?.cancel()
-    }
-
-    /// Hides the live reminder but leaves its occurrence pending, so the
-    /// escalation keeps going. What happens when nobody answers in time.
-    func collapseWithoutResolving() {
-        autoCollapseTask?.cancel()
+    /// Clears the answered reminder off the screen.
+    private func closeLiveReminder() {
         activeOccurrence = nil
+        isLiveReminderSuspended = false
         presenter.dismissLiveReminder()
     }
 
@@ -210,6 +254,8 @@ final class ReminderScheduler: ObservableObject {
 
     func snooze() {
         guard let occurrence = activeOccurrence else { return }
+        // Snoozing something already counted as unfinished puts it back in play.
+        if occurrence.status == .unfinished { occurrence.status = .pending }
         // A snooze must always come back. If this was the last allowed pop,
         // step the count back by one so the snoozed re-pop still happens —
         // otherwise the next check would see "out of attempts" and mark it
@@ -220,7 +266,7 @@ final class ReminderScheduler: ObservableObject {
         }
         occurrence.nextEscalationAt = clock().addingTimeInterval(snoozeInterval)
         try? modelContext?.save()
-        collapseWithoutResolving()
+        closeLiveReminder()
     }
 
     private func resolve(status: OccurrenceStatus) {
@@ -229,7 +275,7 @@ final class ReminderScheduler: ObservableObject {
         occurrence.resolvedAt = clock()
         occurrence.nextEscalationAt = nil
         try? modelContext?.save()
-        collapseWithoutResolving()
+        closeLiveReminder()
     }
 
     // MARK: - End of day

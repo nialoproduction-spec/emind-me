@@ -1,0 +1,277 @@
+import AppKit
+import Combine
+
+/// A random little reaction the menu bar icon plays when the pointer hovers
+/// over it. Each is a short sequence of the traced faces plus a tiny motion.
+enum HoverReaction: String, CaseIterable {
+    case happy, shocked, scared, silly, shy, dizzy, smug, huffy
+
+    var beats: [(face: Face, duration: Double)] {
+        switch self {
+        case .happy:   return [(.happy, 0.35), (.squee, 0.3), (.happy, 0.6)]
+        case .shocked: return [(.owo, 0.12), (.surprisedKiss, 0.55), (.owo, 0.6)]
+        case .scared:  return [(.wail, 0.7), (.tearful, 0.6)]
+        case .silly:   return [(.tongue, 0.4), (.meh, 0.3), (.tongue, 0.5)]
+        case .shy:     return [(.sheepish, 0.6), (.snout, 0.6)]
+        case .dizzy:   return [(.dizzy, 1.0)]
+        case .smug:    return [(.smug, 0.45), (.grin, 0.6)]
+        case .huffy:   return [(.pout, 0.45), (.grumpy, 0.6)]
+        }
+    }
+
+    var duration: Double { beats.reduce(0) { $0 + $1.duration } }
+
+    /// Which face at `t` seconds in; holds the last face once it's played.
+    func face(at t: Double) -> Face {
+        var remaining = max(0, t)
+        for beat in beats {
+            if remaining < beat.duration { return beat.face }
+            remaining -= beat.duration
+        }
+        return beats.last!.face
+    }
+
+    /// A small offset in points, so the face hops, jumps, shivers or sways.
+    func motion(at t: Double) -> CGPoint {
+        let tau = 2 * Double.pi
+        switch self {
+        case .happy, .silly, .smug, .shy:
+            let decay = max(0, 1 - t / 0.8)
+            return CGPoint(x: 0, y: -1.6 * abs(sin(Double.pi * t / 0.22)) * decay)
+        case .shocked:
+            return CGPoint(x: 0, y: t < 0.3 ? -2.2 * sin(Double.pi * t / 0.3) : 0)
+        case .scared, .huffy:
+            let decay = max(0, 1 - t / 0.6)
+            return CGPoint(x: 1.2 * sin(tau * 10 * t) * decay, y: 0)
+        case .dizzy:
+            return CGPoint(x: t < 1.0 ? 1.0 * sin(tau * t / 0.5) : 0, y: 0)
+        }
+    }
+
+    /// A different reaction from last time, so it doesn't feel repetitive.
+    static func random(excluding previous: HoverReaction?) -> HoverReaction {
+        let choices = allCases.filter { $0 != previous }
+        return choices.randomElement() ?? .happy
+    }
+}
+
+/// Draws and animates the menu bar icon:
+/// - idle: the —ω— logo, unchanged (it's the sleepy face);
+/// - pointer over it: wakes up with a random reaction, then back to the logo
+///   once the pointer leaves;
+/// - a reminder waiting for an answer: shows that reminder's mood face
+///   (cute → pouty → angry as it nags), so it's obvious something's due.
+/// Template images throughout, so it follows light and dark menu bars.
+@MainActor
+final class MenuBarFace {
+    /// Fixed image size for every frame, so the menu bar never shifts.
+    nonisolated static let imageSize = NSSize(width: 38, height: 20)
+    nonisolated private static let drawBox = CGSize(width: 34, height: 16)
+
+    private weak var button: NSStatusBarButton?
+    private var hoverTarget: HoverTarget?
+    private var cancellables = Set<AnyCancellable>()
+    private var loop: Task<Void, Never>?
+
+    private enum State {
+        case idle
+        case hover(HoverReaction, start: Date)
+        case reminder(FaceMood, start: Date)
+    }
+    private var state: State = .idle
+    private var pointerInside = false
+    private var lastReaction: HoverReaction?
+    private var lastDrawn: String?
+
+    func attach(to button: NSStatusBarButton) {
+        self.button = button
+        button.imagePosition = .imageOnly
+        show(key: "logo", image: Self.logoImage())
+
+        // .activeAlways: this is a menu bar app, so it's never the active app.
+        let target = HoverTarget(
+            onEnter: { [weak self] in self?.pointerEntered() },
+            onExit: { [weak self] in self?.pointerExited() }
+        )
+        button.addTrackingArea(NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: target, userInfo: nil
+        ))
+        hoverTarget = target
+
+        ReminderScheduler.shared.$activeOccurrence
+            .receive(on: RunLoop.main)
+            .sink { [weak self] occurrence in self?.reminderChanged(occurrence) }
+            .store(in: &cancellables)
+    }
+
+    // MARK: - Events
+
+    private func pointerEntered() {
+        pointerInside = true
+        guard case .idle = state else { return } // a waiting reminder's face takes priority
+        let reaction = HoverReaction.random(excluding: lastReaction)
+        lastReaction = reaction
+        state = .hover(reaction, start: Date())
+        runLoop()
+    }
+
+    private func pointerExited() {
+        pointerInside = false
+        // If the reaction has finished, settle back to the logo now; otherwise
+        // the loop does it when the reaction ends.
+        if case .hover(let reaction, let start) = state, Date().timeIntervalSince(start) >= reaction.duration {
+            goIdle()
+        }
+    }
+
+    private func reminderChanged(_ occurrence: Occurrence?) {
+        if let occurrence {
+            let mood = FaceMood.forPop(
+                count: occurrence.remindersSentCount,
+                maxPops: EscalationSettingsStore.shared.settings.maxReminders
+            )
+            if case .reminder(let current, _) = state, current == mood { return }
+            state = .reminder(mood, start: Date())
+            button?.toolTip = "Remind Me — “\(occurrence.item?.title ?? "Reminder")” is waiting"
+            runLoop()
+        } else if case .reminder = state {
+            button?.toolTip = "Remind Me"
+            goIdle()
+        }
+    }
+
+    private func goIdle() {
+        state = .idle
+        loop?.cancel()
+        loop = nil
+        show(key: "logo", image: Self.logoImage())
+    }
+
+    // MARK: - Animation loop (runs only while not idle)
+
+    private func runLoop() {
+        loop?.cancel()
+        loop = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let interval = self.step()
+                guard let interval else { return }
+                try? await Task.sleep(for: .milliseconds(interval))
+            }
+        }
+    }
+
+    /// Draws the current frame; returns ms until the next one, or nil to stop.
+    private func step() -> Int? {
+        let now = Date()
+        switch state {
+        case .idle:
+            return nil
+        case .hover(let reaction, let start):
+            let t = now.timeIntervalSince(start)
+            let face = reaction.face(at: t)
+            let offset = reaction.motion(at: t)
+            let span = Self.span(of: reaction.beats.map { $0.face })
+            show(key: "\(face)|\(Int(offset.x * 4))|\(Int(offset.y * 4))",
+                 image: Self.faceImage(face, span: span, offset: offset))
+            if t >= reaction.duration {
+                if pointerInside { return nil } // hold the last face while hovered
+                goIdle()
+                return nil
+            }
+            return 40 // ~25 fps, only for the ~1 s the reaction lasts
+        case .reminder(let mood, let start):
+            let face = FaceScript.face(for: mood, at: now.timeIntervalSince(start))
+            let span = Self.span(of: FaceScript.beats(for: mood).map { $0.face })
+            show(key: "\(face)", image: Self.faceImage(face, span: span, offset: .zero))
+            return 150 // expression swaps only — cheap enough to run while it waits
+        }
+    }
+
+    private func show(key: String, image: NSImage) {
+        guard key != lastDrawn else { return }
+        lastDrawn = key
+        button?.image = image
+    }
+
+    // MARK: - Drawing
+
+    /// The —ω— logo, exactly as before.
+    nonisolated static func logoImage() -> NSImage {
+        let logo = FaceShapes.logo
+        let box = logo.boundingBoxOfPath
+        let scale = drawBox.width / box.width
+        return template { ctx, rect in
+            ctx.translateBy(x: (rect.width - box.width * scale) / 2, y: (rect.height - box.height * scale) / 2)
+            ctx.scaleBy(x: scale, y: scale)
+            ctx.translateBy(x: -box.minX, y: -box.minY)
+            fill(logo, in: ctx, embolden: 0.6 / scale)
+        }
+    }
+
+    /// One face, scaled so every face in its sequence shares a size and centre.
+    nonisolated static func faceImage(_ face: Face, span: CGRect, offset: CGPoint) -> NSImage {
+        let scale = min(drawBox.width / span.width, drawBox.height / span.height)
+        let strokes = FaceShapes.strokes(face)
+        let tears = FaceShapes.tears(face)
+        return template { ctx, rect in
+            ctx.translateBy(x: rect.width / 2 + offset.x, y: rect.height / 2 + offset.y)
+            ctx.scaleBy(x: scale, y: scale)
+            ctx.translateBy(x: -span.midX, y: -span.midY)
+            if let tears { fill(tears, in: ctx, embolden: 0) }
+            fill(strokes, in: ctx, embolden: 0.5 / scale)
+        }
+    }
+
+    /// Combined bounds of a set of faces, in canvas units.
+    nonisolated static func span(of faces: [Face]) -> CGRect {
+        faces.reduce(CGRect.null) { box, face in
+            var box = box.union(FaceShapes.strokes(face).boundingBoxOfPath)
+            if let tears = FaceShapes.tears(face) { box = box.union(tears.boundingBoxOfPath) }
+            return box
+        }
+    }
+
+    nonisolated private static func fill(_ path: CGPath, in ctx: CGContext, embolden lineWidth: CGFloat) {
+        ctx.setFillColor(NSColor.black.cgColor)
+        ctx.addPath(path)
+        ctx.fillPath(using: .evenOdd)
+        guard lineWidth > 0 else { return }
+        // At menu bar size the traced lines are thin; thicken them a touch.
+        ctx.setStrokeColor(NSColor.black.cgColor)
+        ctx.setLineWidth(lineWidth)
+        ctx.setLineJoin(.round)
+        ctx.addPath(path)
+        ctx.strokePath()
+    }
+
+    nonisolated private static func template(_ draw: @escaping (CGContext, NSRect) -> Void) -> NSImage {
+        let image = NSImage(size: imageSize, flipped: true) { rect in
+            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
+            draw(ctx, rect)
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "Remind Me"
+        return image
+    }
+}
+
+/// Receives the hover events for the menu bar button.
+private final class HoverTarget: NSResponder {
+    private let onEnter: @MainActor () -> Void
+    private let onExit: @MainActor () -> Void
+
+    init(onEnter: @escaping @MainActor () -> Void, onExit: @escaping @MainActor () -> Void) {
+        self.onEnter = onEnter
+        self.onExit = onExit
+        super.init()
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func mouseEntered(with event: NSEvent) { onEnter() }
+    override func mouseExited(with event: NSEvent) { onExit() }
+}

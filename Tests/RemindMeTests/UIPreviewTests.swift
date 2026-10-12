@@ -116,21 +116,82 @@ final class UIPreviewTests: XCTestCase {
         try save(strips, as: "preview-4-animation-filmstrips.png")
     }
 
+    private func icon(_ image: NSImage, _ color: Color) -> some View {
+        Image(nsImage: image).renderingMode(.template).foregroundStyle(color)
+    }
+
     func testRenderMenuBarIcon() throws {
         try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
-        let icon = StatusIcon.image()
-        let bar = VStack(spacing: 0) {
-            HStack(spacing: 14) {
-                Image(nsImage: icon).renderingMode(.template).foregroundStyle(.white)
-                Text("Tue 13 Oct 1:37 AM").font(.system(size: 13)).foregroundStyle(.white)
+        let reactions = HoverReaction.allCases
+        let times: [Double] = [0.05, 0.3, 0.6, 2.0]
+        let sheet = VStack(alignment: .leading, spacing: 0) {
+            ForEach([true, false], id: \.self) { dark in
+                let fg: Color = dark ? .white : .black
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 10) {
+                        Text("idle").font(.system(size: 10)).foregroundStyle(fg).frame(width: 64, alignment: .leading)
+                        icon(MenuBarFace.logoImage(), fg)
+                        Text("Tue 13 Oct 1:37 AM").font(.system(size: 13)).foregroundStyle(fg)
+                    }
+                    ForEach(reactions.indices, id: \.self) { i in
+                        let reaction = reactions[i]
+                        let span = MenuBarFace.span(of: reaction.beats.map { $0.face })
+                        HStack(spacing: 10) {
+                            Text("hover: \(reaction.rawValue)").font(.system(size: 10)).foregroundStyle(fg)
+                                .frame(width: 64, alignment: .leading)
+                            ForEach(times, id: \.self) { t in
+                                icon(MenuBarFace.faceImage(reaction.face(at: t), span: span, offset: reaction.motion(at: t)), fg)
+                            }
+                        }
+                    }
+                    ForEach([FaceMood.gentle, .nudge, .urgent], id: \.self) { mood in
+                        let faces = FaceScript.beats(for: mood).map { $0.face }
+                        let span = MenuBarFace.span(of: faces)
+                        HStack(spacing: 10) {
+                            Text("due: \(String(describing: mood))").font(.system(size: 10)).foregroundStyle(fg)
+                                .frame(width: 64, alignment: .leading)
+                            ForEach(Array(Set(faces)).sorted { $0.rawValue < $1.rawValue }.prefix(5), id: \.self) { face in
+                                icon(MenuBarFace.faceImage(face, span: span, offset: .zero), fg)
+                            }
+                        }
+                    }
+                }
+                .padding(8)
+                .frame(width: 330, alignment: .leading)
+                .background(dark ? Color(white: 0.12) : Color(white: 0.92))
             }
-            .frame(width: 260, height: 24).background(Color(white: 0.12))
-            HStack(spacing: 14) {
-                Image(nsImage: icon).renderingMode(.template).foregroundStyle(.black)
-                Text("Tue 13 Oct 1:37 AM").font(.system(size: 13)).foregroundStyle(.black)
-            }
-            .frame(width: 260, height: 24).background(Color(white: 0.92))
         }
-        try save(bar, as: "preview-5-menu-bar.png")
+        try save(sheet, as: "preview-5-menu-bar.png")
+    }
+
+    func testRenderPlacements() throws {
+        try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
+        // A scaled-down 1440 × 900 screen for each placement.
+        let screen = CGRect(x: 0, y: 0, width: 1440, height: 875)
+        let icon = CGRect(x: 1180, y: 875, width: 38, height: 25)
+        let scale: CGFloat = 0.15
+        let sheet = HStack(spacing: 10) {
+            ForEach(PanelPlacement.allCases) { placement in
+                let f = PanelPlacementMath.frame(
+                    for: placement, size: ReminderPanelController.liveReminderSize, visibleFrame: screen,
+                    customTopLeft: CGPoint(x: 520, y: 600), statusItemFrame: icon)
+                VStack(spacing: 4) {
+                    ZStack(alignment: .topLeading) {
+                        Rectangle().fill(Color(white: 0.25)).frame(width: 1440 * scale, height: 900 * scale)
+                        Rectangle().fill(Color(white: 0.4)).frame(width: 1440 * scale, height: 25 * scale)
+                        Rectangle().fill(Color.white).frame(width: icon.width * scale, height: 3)
+                            .offset(x: icon.minX * scale, y: 1)
+                        RoundedRectangle(cornerRadius: 3).fill(Color.blue)
+                            .frame(width: f.width * scale, height: f.height * scale)
+                            .offset(x: f.minX * scale, y: (900 - f.maxY) * scale)
+                    }
+                    .frame(width: 1440 * scale, height: 900 * scale)
+                    Text(placement.label).font(.system(size: 10)).foregroundStyle(.white)
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.black)
+        try save(sheet, as: "preview-6-placements.png")
     }
 }

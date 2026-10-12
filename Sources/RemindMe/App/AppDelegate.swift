@@ -1,9 +1,11 @@
 import AppKit
 import SwiftData
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var modelContainer: ModelContainer!
+    private let menuBarFace = MenuBarFace()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory) // belt-and-suspenders alongside LSUIElement
@@ -24,14 +26,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setUpStatusItem() {
-        // The —ω— logo; wider than a square glyph, so variable length.
+        // The —ω— logo; wider than a square glyph, so variable length. It
+        // reacts when hovered and shows a waiting reminder's mood.
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            button.image = StatusIcon.image()
+            menuBarFace.attach(to: button)
             button.toolTip = "Remind Me"
             button.target = self
             button.action = #selector(statusItemClicked(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        }
+        // For "under the menu bar icon" placement.
+        ReminderPanelController.shared.statusItemFrame = { [weak self] in
+            self?.statusItem.button?.window?.frame
         }
     }
 
