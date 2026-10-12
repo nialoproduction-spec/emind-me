@@ -64,8 +64,8 @@ xcrun stapler staple "dist/Remind Me.dmg"
   - **Goal** — no time at all → never alerts, just tracked, with an
     optional target date picked up from phrases like "by Friday" via
     `NSDataDetector`.
-- **Status item** (`AppDelegate`) — left-click toggles the panel, right-click
-  quits. No Dock icon (`LSUIElement` in Info.plist).
+- **Status item** (`AppDelegate`) — left-click toggles the panel; right-click
+  opens a menu (Weekly Summary, Quit). No Dock icon (`LSUIElement` in Info.plist).
 - **Panel** (`ReminderPanel` / `ReminderPanelController`) — a borderless,
   non-activating `NSPanel`. `isMovableByWindowBackground = true` makes it
   draggable anywhere on screen without any manual mouse tracking; dragged
@@ -110,8 +110,8 @@ xcrun stapler staple "dist/Remind Me.dmg"
   routines use `UNCalendarNotificationTrigger` (one per weekday if specific
   days were given); goals never get a notification.
 - **Theme** (`PanelTheme`, `ThemeStore`) — background/accent/text colors,
-  font, size and corner radius, all user-editable from the panel's paintbrush
-  button, persisted as JSON in `UserDefaults`.
+  font, size and corner radius, all user-editable from Settings (the panel's
+  gear button), persisted as JSON in `UserDefaults`.
 - **Scheduler** (`ReminderScheduler`) — the reliability-critical piece.
   Every due time lives as an absolute `Date`: `Item.nextFireDate` for the
   next routine firing, `Occurrence.nextEscalationAt` for the next nag. A
@@ -121,12 +121,10 @@ xcrun stapler staple "dist/Remind Me.dmg"
   once on wake rather than flooding with every missed interval, or being
   silently dropped. Nothing schedules the Mac to wake itself, per the spec.
 - **Occurrence / escalation** — each firing is its own `Occurrence` row:
-  Done / Snooze 5m / Skip, or N unanswered pops M minutes apart before it's
+  Done / Snooze / Skip, or N unanswered pops M minutes apart before it's
   marked `unfinished` and stops nagging. N and M are set in Settings →
   Reminders ("Pop-ups before giving up" / "Minutes between pop-ups",
-  `EscalationSettings`) — default 3 pops, 15 minutes apart. Today's
-  occurrences, grouped under "Today — X of Y done," live at the top of the
-  expanded panel.
+  `EscalationSettings`) — default 3 pops, 15 minutes apart.
 - **Faces** (`Faces/`) — the 24 kaomoji expressions from
   `Design/expressions.jpg`, traced to vector outlines by
   `scripts/trace_faces.py` (re-run it if the sheet changes). The live
@@ -147,6 +145,43 @@ xcrun stapler staple "dist/Remind Me.dmg"
   assertions file other menu-bar utilities have used, which Apple can break
   on any update without notice. If that read ever fails, it defaults to
   *not* suppressing — see the comment in `FocusGuard.swift`.
+
+## The panel list and everyday actions
+
+- **Order:** Goals at the top, Reminders (routines) in the middle, and
+  Today's checklist ("Today — X of Y done") at the bottom.
+- **Today's checklist** — click a row (or its circle) to tick it off; click
+  again to un-tick ("Not done" is stored as missed). Right-click for Done /
+  Skipped / Not done. If it's the reminder on screen, that answers it.
+- **Swipe left** on any row → Edit, Delete (with a confirmation). **Swipe
+  right** → Done / Achieved / Pause 1h / Resume. Right-click for everything.
+- **Pause for a while** (`ItemActions.pause`) — the ⚡ button: 1 hour, until
+  tomorrow (6 AM), 1 week, or until resumed. Timed pauses resume by themselves
+  (`Item.pausedUntil`, checked on every tick).
+- **Edit** (`EditItemView`) — name, category, "every N minutes/hours/days",
+  or a time on chosen weekdays, or turn it into a goal. The next reminder is
+  worked out again from now.
+- **History & streak** (`ItemHistoryView`) — tap a routine: streak (days with
+  at least half done, empty days don't break it), 30-day completion rate,
+  snoozes this week, a 14-day grid and recent entries.
+- **Weekly summary** (`WeeklySummaryView`) — pops up once a week (day and time
+  in Settings → Smart); also from the chart button and the menu bar menu.
+- **Snooze lengths** — Snooze reveals 5m / 15m / 30m / 1h (choose in Settings
+  → Smart); a plain snooze uses the shortest.
+- **Keyboard** — ⌃⌥D Done, ⌃⌥S Snooze, ⌃⌥K Skip from any app while a reminder
+  is showing (`GlobalHotkeys`, no Accessibility permission needed); Return /
+  S / K when the card has focus.
+- **Categories** — type `#work`, `#health`… when adding; coloured tags and a
+  filter bar. Manage the list in Settings → Smart.
+- **Smart** — hold reminders while you're away from the Mac (`AwayDetector`,
+  idle time only) so they don't nag an empty room; suggestions such as "you
+  usually do this at 4:35 — move it?" or "you often snooze this — space it
+  out?" (`Insights`), learned only from reminders since the last schedule edit.
+
+## Working on it with another AI tool
+
+See `AGENTS.md` — a map of the code, how to build without a Mac (GitHub
+Actions), and the rules that keep data safe.
 
 ## Where this came from
 
