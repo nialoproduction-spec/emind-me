@@ -42,6 +42,15 @@ final class Item {
     /// Always nil for goals.
     var nextFireDate: Date?
 
+    /// On a timed pause until this moment, then resumes by itself. Nil when
+    /// running, or when paused with no end ("until I resume").
+    var pausedUntil: Date?
+    /// Optional category, e.g. "Health" or "Work".
+    var category: String?
+    /// When its schedule was last edited. Smart suggestions only learn from
+    /// reminders after this, so an applied suggestion isn't suggested again.
+    var scheduleEditedAt: Date?
+
     var kind: ItemKind {
         get { ItemKind(rawValue: kindRaw) ?? .goal }
         set { kindRaw = newValue.rawValue }
@@ -59,7 +68,8 @@ final class Item {
         minute: Int? = nil,
         weekdaysRaw: [Int]? = nil,
         targetDate: Date? = nil,
-        nextFireDate: Date? = nil
+        nextFireDate: Date? = nil,
+        category: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -73,6 +83,9 @@ final class Item {
         self.weekdaysRaw = weekdaysRaw
         self.targetDate = targetDate
         self.nextFireDate = nextFireDate
+        self.pausedUntil = nil
+        self.category = category
+        self.scheduleEditedAt = nil
     }
 
     convenience init(from parsed: ParsedItem) {
@@ -83,7 +96,8 @@ final class Item {
             hour: parsed.hour,
             minute: parsed.minute,
             weekdaysRaw: parsed.weekdays.isEmpty ? nil : Array(parsed.weekdays).sorted(),
-            targetDate: parsed.targetDate
+            targetDate: parsed.targetDate,
+            category: parsed.category
         )
         self.nextFireDate = computeNextFireDate()
     }

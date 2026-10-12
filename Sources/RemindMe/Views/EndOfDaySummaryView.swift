@@ -69,6 +69,7 @@ struct EndOfDaySummaryView: View {
     private func reschedule(_ occurrence: Occurrence) {
         guard let item = occurrence.item else { return }
         item.isActive = true
+        item.pausedUntil = nil
         let fresh = Occurrence(item: item, scheduledFireDate: .now)
         fresh.nextEscalationAt = .now
         modelContext.insert(fresh)

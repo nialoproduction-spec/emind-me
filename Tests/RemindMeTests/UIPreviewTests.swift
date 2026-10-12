@@ -29,14 +29,16 @@ final class UIPreviewTests: XCTestCase {
 
     private let theme = PanelTheme.default
 
-    private func card(popCount: Int, reaction: FaceMood? = nil, title: String = "Drink water") -> some View {
+    private func card(popCount: Int, reaction: FaceMood? = nil, title: String = "Drink water",
+                      choosingSnooze: Bool = false) -> some View {
         let item = Item(title: title, kind: .repeatingRoutine, intervalSeconds: 40 * 60)
         let occurrence = Occurrence(item: item, scheduledFireDate: .now)
         occurrence.remindersSentCount = popCount
         return ZStack {
             RoundedRectangle(cornerRadius: theme.cornerRadius, style: .continuous)
                 .fill(theme.background.opacity(theme.backgroundOpacity))
-            LiveReminderView(occurrence: occurrence, theme: theme, initialReaction: reaction)
+            LiveReminderView(occurrence: occurrence, theme: theme, initialReaction: reaction,
+                             choosingSnooze: choosingSnooze)
         }
         .frame(width: ReminderPanelController.liveReminderSize.width,
                height: ReminderPanelController.liveReminderSize.height)
@@ -218,5 +220,133 @@ final class UIPreviewTests: XCTestCase {
             .frame(width: 340)
             .background(Color(nsColor: .windowBackgroundColor))
         try save(view, as: "preview-7-your-reminders.png")
+    }
+
+    // MARK: - New screens
+
+    /// A dark panel-coloured backdrop of a given size.
+    private func panel<V: View>(width: CGFloat, height: CGFloat? = nil, @ViewBuilder _ content: () -> V) -> some View {
+        content()
+            .frame(width: width, height: height, alignment: .top)
+            .background(
+                RoundedRectangle(cornerRadius: theme.cornerRadius, style: .continuous)
+                    .fill(theme.background.opacity(theme.backgroundOpacity))
+            )
+            .clipShape(RoundedRectangle(cornerRadius: theme.cornerRadius, style: .continuous))
+            .padding(10)
+            .background(Color(white: 0.5))
+    }
+
+    /// Sample routines with two weeks of history.
+    private func sampleData() throws -> (ModelContainer, [Item], [Occurrence]) {
+        let container = try ModelContainer(
+            for: Item.self, Occurrence.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let context = container.mainContext
+        let water = Item(from: ItemParser.parse("drink water every 40 minutes #health"))
+        let walk = Item(from: ItemParser.parse("walk at 4pm every day #health"))
+        let standup = Item(from: ItemParser.parse("standup notes at 9:30am on weekdays #work"))
+        let goal = Item(from: ItemParser.parse("go to Godavari #travel"))
+        let paused = Item(from: ItemParser.parse("meditate at 6am"))
+        paused.isActive = false
+        paused.pausedUntil = Calendar.current.date(byAdding: .day, value: 1, to: .now)
+        [water, walk, standup, goal, paused].forEach { context.insert($0) }
+
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: .now)
+        for offset in 0..<14 {
+            let day = calendar.date(byAdding: .day, value: -offset, to: today)!
+            let walkAt = calendar.date(bySettingHour: 16, minute: 0, second: 0, of: day)!
+            let walked = Occurrence(item: walk, scheduledFireDate: walkAt)
+            walked.status = offset == 9 ? .skipped : (offset == 0 ? .pending : .done)
+            walked.resolvedAt = walkAt.addingTimeInterval(35 * 60)
+            context.insert(walked)
+            for hour in [9, 10, 11, 14] {
+                let at = calendar.date(bySettingHour: hour, minute: 20, second: 0, of: day)!
+                guard at < .now else { continue }
+                let sip = Occurrence(item: water, scheduledFireDate: at)
+                sip.status = (offset + hour) % 5 == 0 ? .unfinished : ((offset + hour) % 4 == 0 ? .skipped : .done)
+                if hour == 14 { sip.snoozedMinutes = 15 }
+                context.insert(sip)
+            }
+        }
+        try context.save()
+        let items = try context.fetch(FetchDescriptor<Item>())
+        let occurrences = try context.fetch(FetchDescriptor<Occurrence>())
+        return (container, items, occurrences)
+    }
+
+    func testRenderNewCardsAndRows() throws {
+        try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
+        let (container, items, occurrences) = try sampleData()
+        _ = container
+        let cards = HStack(spacing: 0) {
+            card(popCount: 1)
+            card(popCount: 1, choosingSnooze: true)
+        }
+        try save(cards, as: "preview-8-card-shortcuts-and-snooze-lengths.png")
+
+        func find(_ prefix: String) -> Item { items.first { $0.title.hasPrefix(prefix) }! }
+        let today = occurrences.filter { $0.dayKey == Occurrence.dayKey(for: .now) }
+            .sorted { $0.scheduledFireDate < $1.scheduledFireDate }
+        let rows = panel(width: 340) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("GOALS").font(.system(size: 10, weight: .semibold)).foregroundStyle(.gray)
+                ReminderRowView(item: find("Go"), theme: theme, onToggle: {})
+                Text("REMINDERS").font(.system(size: 10, weight: .semibold)).foregroundStyle(.gray)
+                ReminderRowView(item: find("Walk"), theme: theme, streak: 4, onToggle: {})
+                ReminderRowView(item: find("Meditate"), theme: theme, onToggle: {})
+                Text("TODAY").font(.system(size: 10, weight: .semibold)).foregroundStyle(.gray)
+                ForEach(today.prefix(4)) { ChecklistRowView(occurrence: $0, theme: theme) }
+                SuggestionBar(
+                    suggestion: Insights.Suggestion(
+                        id: "x", itemID: find("Walk").persistentModelID,
+                        message: "You usually do “Walk” around 4:35 PM. Move it there?",
+                        actionLabel: "Move to 4:35 PM", action: .moveTime(hour: 16, minute: 35)),
+                    theme: theme, onApply: {}, onDismiss: {}
+                )
+            }
+            .padding(14)
+        }
+        try save(rows, as: "preview-9-list-rows.png")
+    }
+
+    func testRenderHistoryAndWeekly() throws {
+        try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
+        let (container, items, occurrences) = try sampleData()
+        _ = container
+        let walk = try XCTUnwrap(items.first { $0.title.hasPrefix("Walk") })
+        let water = try XCTUnwrap(items.first { $0.title.hasPrefix("Drink") })
+        let sheet = HStack(alignment: .top, spacing: 0) {
+            panel(width: 340) {
+                ItemHistoryContent(item: walk, occurrences: occurrences, theme: theme, now: .now).padding(14)
+            }
+            panel(width: 340) {
+                ItemHistoryContent(item: water, occurrences: occurrences, theme: theme, now: .now).padding(14)
+            }
+            panel(width: 340) {
+                WeeklySummaryContent(
+                    summary: Insights.weeklySummary(items: items, occurrences: occurrences, now: .now),
+                    theme: theme
+                )
+                .padding(14)
+            }
+        }
+        try save(sheet, as: "preview-10-history-and-weekly.png")
+    }
+
+    func testRenderEditScreen() throws {
+        try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
+        let (container, items, _) = try sampleData()
+        _ = container
+        let walk = try XCTUnwrap(items.first { $0.title.hasPrefix("Walk") })
+        let water = try XCTUnwrap(items.first { $0.title.hasPrefix("Drink") })
+        let sheet = HStack(alignment: .top, spacing: 0) {
+            panel(width: 340, height: 480) { EditItemView(item: walk, theme: theme, onDone: {}) }
+            panel(width: 340, height: 480) { EditItemView(item: water, theme: theme, onDone: {}) }
+            panel(width: 340, height: 480) { SmartSettingsView().padding(14).environment(\.colorScheme, .dark) }
+        }
+        try save(sheet, as: "preview-11-edit-and-smart-settings.png")
     }
 }

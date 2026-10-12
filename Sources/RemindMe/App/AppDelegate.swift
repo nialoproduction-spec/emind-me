@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ReminderPanelController.shared.configure(modelContainer: modelContainer)
             NotificationService.shared.requestAuthorizationIfNeeded()
             ReminderScheduler.shared.start(modelContext: modelContainer.mainContext)
+            GlobalHotkeys.shared.start()
         }
 
         setUpStatusItem()
@@ -55,10 +56,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showMenu() {
         let menu = NSMenu()
+        menu.addItem(withTitle: "Weekly Summary", action: #selector(showWeeklySummary), keyEquivalent: "").target = self
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Remind Me", action: #selector(quit), keyEquivalent: "q").target = self
         statusItem.menu = menu
         statusItem.button?.performClick(nil)
         statusItem.menu = nil // detach so left-click goes back to toggling the panel
+    }
+
+    @objc private func showWeeklySummary() {
+        ReminderScheduler.shared.presentWeeklySummary()
     }
 
     @objc private func quit() {

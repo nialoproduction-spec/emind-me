@@ -31,6 +31,9 @@ final class Occurrence {
     /// once escalation is exhausted (unfinished).
     var nextEscalationAt: Date?
     var resolvedAt: Date?
+    /// Total minutes this reminder was snoozed (nil = never). Feeds the
+    /// "you often snooze this" suggestion and the weekly summary.
+    var snoozedMinutes: Int?
 
     var status: OccurrenceStatus {
         get { OccurrenceStatus(rawValue: statusRaw) ?? .pending }
@@ -52,6 +55,7 @@ final class Occurrence {
         self.firstFiredAt = nil
         self.nextEscalationAt = nil
         self.resolvedAt = nil
+        self.snoozedMinutes = nil
     }
 
     static func dayKey(for date: Date, calendar: Calendar = .current) -> String {

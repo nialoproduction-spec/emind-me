@@ -24,7 +24,10 @@ final class DeletionTests: XCTestCase {
             presenter: presenter,
             now: { [unowned self] in self.clock },
             shouldSuppress: { false },
-            escalationSettings: { EscalationSettings(maxReminders: 3, intervalMinutes: 15) }
+            escalationSettings: { EscalationSettings(maxReminders: 3, intervalMinutes: 15) },
+            isAway: { false },
+            resumed: { _ in },
+            weeklySettings: .testing(WeeklySummarySettings(isEnabled: false))
         )
         scheduler.attach(modelContext: context)
     }
@@ -153,7 +156,9 @@ final class StoreRepairTests: XCTestCase {
         // Next launch: the store opens and the scheduler runs over it.
         let container = try open(url)
         XCTAssertEqual(try container.mainContext.fetch(FetchDescriptor<Occurrence>()).count, 0)
-        let scheduler = ReminderScheduler(presenter: FakePresenter(), shouldSuppress: { false })
+        let scheduler = ReminderScheduler(presenter: FakePresenter(), shouldSuppress: { false },
+                                          isAway: { false }, resumed: { _ in },
+                                          weeklySettings: .testing(WeeklySummarySettings(isEnabled: false)))
         scheduler.attach(modelContext: container.mainContext)
         scheduler.tick()
     }

@@ -54,6 +54,17 @@ final class ReminderScheduler: ObservableObject {
     @Published private(set) var isLiveReminderSuspended = false
     /// Flips true when it's time to show the end-of-day summary.
     @Published var showEndOfDaySummary = false
+    /// Flips true when it's time to show the weekly summary.
+    @Published var showWeeklySummary = false
+    /// A Done / Snooze / Skip pressed on the keyboard; the reminder card
+    /// picks it up so it can play its reaction first.
+    @Published private(set) var shortcutRequest: ShortcutRequest?
+
+    enum ShortcutAction: Equatable { case done, snooze, skip }
+    struct ShortcutRequest: Equatable {
+        let id = UUID()
+        let action: ShortcutAction
+    }
 
     private var modelContext: ModelContext?
     private var tickTimer: Timer?
@@ -61,7 +72,6 @@ final class ReminderScheduler: ObservableObject {
     private var spaceObserver: NSObjectProtocol?
 
     private let tickInterval: TimeInterval = 20
-    let snoozeInterval: TimeInterval = 5 * 60
     let suppressedRetryInterval: TimeInterval = 45
 
     // Injected so tests can drive time, the screen, and settings directly.
@@ -71,6 +81,14 @@ final class ReminderScheduler: ObservableObject {
     /// Read fresh on every use, so a change in Settings applies to the very
     /// next pop without needing a restart.
     private let escalationSettings: @MainActor () -> EscalationSettings
+    /// Nobody at the Mac (smart "hold while away").
+    private let isAway: @MainActor () -> Bool
+    /// Default snooze length, in minutes.
+    private let defaultSnoozeMinutes: @MainActor () -> Int
+    /// A timed pause just ended (re-schedules its notifications).
+    private let resumed: @MainActor (Item) -> Void
+    /// When (and whether) the weekly summary shows.
+    private let weeklySettings: PersistedSettings<WeeklySummarySettings>
 
     private var escalation: EscalationSettings { escalationSettings() }
 
@@ -78,12 +96,20 @@ final class ReminderScheduler: ObservableObject {
         presenter: LiveReminderPresenting? = nil,
         now: (@MainActor () -> Date)? = nil,
         shouldSuppress: (@MainActor () -> Bool)? = nil,
-        escalationSettings: (@MainActor () -> EscalationSettings)? = nil
+        escalationSettings: (@MainActor () -> EscalationSettings)? = nil,
+        isAway: (@MainActor () -> Bool)? = nil,
+        defaultSnoozeMinutes: (@MainActor () -> Int)? = nil,
+        resumed: (@MainActor (Item) -> Void)? = nil,
+        weeklySettings: PersistedSettings<WeeklySummarySettings>? = nil
     ) {
         self.presenter = presenter ?? ReminderPanelController.shared
         self.clock = now ?? { Date.now }
         self.shouldSuppress = shouldSuppress ?? { FocusGuard.shouldSuppress() }
         self.escalationSettings = escalationSettings ?? { EscalationSettingsStore.shared.settings }
+        self.isAway = isAway ?? { AwayDetector.isAway() }
+        self.defaultSnoozeMinutes = defaultSnoozeMinutes ?? { AppSettings.snooze.value.defaultMinutes }
+        self.resumed = resumed ?? { NotificationService.shared.schedule(for: $0) }
+        self.weeklySettings = weeklySettings ?? AppSettings.weekly
     }
 
     func start(modelContext: ModelContext) {
@@ -129,6 +155,7 @@ final class ReminderScheduler: ObservableObject {
         guard let modelContext else { return }
         let now = clock()
         let suppressed = shouldSuppress()
+        let away = isAway()
         updateSuspension(suppressed: suppressed)
 
         let items = (try? modelContext.fetch(FetchDescriptor<Item>())) ?? []
@@ -143,6 +170,16 @@ final class ReminderScheduler: ObservableObject {
             }
         }
 
+        // Timed pauses that have run out resume on their own.
+        for item in items where item.kind != .goal {
+            if let until = item.pausedUntil, until <= now {
+                item.pausedUntil = nil
+                item.isActive = true
+                item.nextFireDate = item.computeNextFireDate(after: now)
+                resumed(item)
+            }
+        }
+
         for item in items {
             guard item.kind != .goal, item.isActive else { continue }
 
@@ -151,20 +188,21 @@ final class ReminderScheduler: ObservableObject {
                 if occurrence.remindersSentCount >= escalation.maxReminders {
                     finalizeUnfinished(occurrence) // if it's the one on screen, it stays there
                 } else if occurrence.id == activeOccurrence?.id {
-                    nagInPlace(occurrence, suppressed: suppressed)
+                    nagInPlace(occurrence, held: suppressed || away)
                 } else {
-                    attemptPresent(occurrence)
+                    attemptPresent(occurrence, held: away)
                 }
             } else if let nextFire = item.nextFireDate, nextFire <= now {
-                fireNew(item: item, dueAt: nextFire)
+                fireNew(item: item, dueAt: nextFire, held: away)
             }
         }
 
         checkEndOfDay(now: now)
+        checkWeeklySummary(now: now)
         try? modelContext.save()
     }
 
-    private func fireNew(item: Item, dueAt: Date) {
+    private func fireNew(item: Item, dueAt: Date, held: Bool = false) {
         guard let modelContext else { return }
         let occurrence = Occurrence(item: item, scheduledFireDate: dueAt)
         modelContext.insert(occurrence)
@@ -180,12 +218,14 @@ final class ReminderScheduler: ObservableObject {
         }
         item.nextFireDate = next
 
-        attemptPresent(occurrence)
+        attemptPresent(occurrence, held: held)
     }
 
-    private func attemptPresent(_ occurrence: Occurrence) {
+    /// `held`: the person is away from the Mac — wait for them, without
+    /// spending one of the attempts.
+    private func attemptPresent(_ occurrence: Occurrence, held: Bool = false) {
         let current = clock()
-        guard activeOccurrence == nil, !shouldSuppress() else {
+        guard activeOccurrence == nil, !held, !shouldSuppress() else {
             // Not shown — retry soon without spending one of the attempts.
             occurrence.nextEscalationAt = current.addingTimeInterval(suppressedRetryInterval)
             return
@@ -207,9 +247,9 @@ final class ReminderScheduler: ObservableObject {
     /// step is due: nag in place. The count goes up (so the face's mood steps
     /// up) and the panel comes forward. During a Focus / full screen it waits
     /// instead, without using up a step.
-    private func nagInPlace(_ occurrence: Occurrence, suppressed: Bool) {
+    private func nagInPlace(_ occurrence: Occurrence, held: Bool) {
         let current = clock()
-        guard !suppressed else {
+        guard !held else {
             occurrence.nextEscalationAt = current.addingTimeInterval(suppressedRetryInterval)
             return
         }
@@ -261,9 +301,44 @@ final class ReminderScheduler: ObservableObject {
 
     func markDone() { resolve(status: .done) }
     func skip() { resolve(status: .skipped) }
+    /// Answer the reminder on screen with any status (the checklist's "Not done").
+    func resolveActive(as status: OccurrenceStatus) { resolve(status: status) }
 
-    func snooze() {
+    /// From the global keyboard shortcuts: the reminder card plays its
+    /// reaction and performs the action.
+    func requestShortcut(_ action: ShortcutAction) {
         guard let occurrence = activeOccurrence else { return }
+        // Tucked away (Focus / full screen): nothing to animate, just do it.
+        guard !isLiveReminderSuspended else { perform(action); return }
+        let request = ShortcutRequest(action: action)
+        shortcutRequest = request
+        // The card normally takes it from here. If it hasn't within a
+        // couple of seconds, act directly so the key press never gets lost.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard let self, self.shortcutRequest?.id == request.id,
+                  self.activeOccurrence?.id == occurrence.id else { return }
+            self.shortcutRequest = nil
+            self.perform(action)
+        }
+    }
+
+    /// The card picked up the shortcut and is handling it.
+    func consumeShortcut() { shortcutRequest = nil }
+
+    private func perform(_ action: ShortcutAction) {
+        switch action {
+        case .done: markDone()
+        case .snooze: snooze()
+        case .skip: skip()
+        }
+    }
+
+    /// Snooze for `minutes` (the default length from Settings when nil).
+    func snooze(minutes: Int? = nil) {
+        guard let occurrence = activeOccurrence else { return }
+        let length = max(1, minutes ?? defaultSnoozeMinutes())
+        occurrence.snoozedMinutes = (occurrence.snoozedMinutes ?? 0) + length
         // Snoozing something already counted as unfinished puts it back in play.
         if occurrence.status == .unfinished { occurrence.status = .pending }
         // A snooze must always come back. If this was the last allowed pop,
@@ -274,7 +349,7 @@ final class ReminderScheduler: ObservableObject {
         if occurrence.remindersSentCount >= maxPops {
             occurrence.remindersSentCount = maxPops - 1
         }
-        occurrence.nextEscalationAt = clock().addingTimeInterval(snoozeInterval)
+        occurrence.nextEscalationAt = clock().addingTimeInterval(TimeInterval(length * 60))
         try? modelContext?.save()
         closeLiveReminder()
     }
@@ -315,6 +390,41 @@ final class ReminderScheduler: ObservableObject {
         EndOfDaySettingsStore.shared.settings.lastShownDayKey = Occurrence.dayKey(for: now)
         showEndOfDaySummary = true
         presenter.presentOverlay()
+    }
+
+    nonisolated static func shouldShowWeeklySummary(
+        settings: WeeklySummarySettings, now: Date, calendar: Calendar = .current
+    ) -> Bool {
+        guard settings.isEnabled,
+              calendar.component(.weekday, from: now) == settings.weekday,
+              settings.lastShownWeekKey != Insights.weekKey(for: now, calendar: calendar) else { return false }
+        var comps = calendar.dateComponents([.year, .month, .day], from: now)
+        comps.hour = settings.hour
+        comps.minute = settings.minute
+        comps.second = 0
+        guard let time = calendar.date(from: comps) else { return false }
+        return now >= time
+    }
+
+    private func checkWeeklySummary(now: Date) {
+        // One overlay at a time: wait for the end-of-day summary to be closed.
+        guard !showWeeklySummary, !showEndOfDaySummary else { return }
+        guard Self.shouldShowWeeklySummary(settings: weeklySettings.value, now: now) else { return }
+        weeklySettings.value.lastShownWeekKey = Insights.weekKey(for: now)
+        showWeeklySummary = true
+        presenter.presentOverlay()
+    }
+
+    /// Opened by hand (menu bar right-click → Weekly Summary).
+    func presentWeeklySummary() {
+        guard !showWeeklySummary else { return }
+        showWeeklySummary = true
+        presenter.presentOverlay()
+    }
+
+    func dismissWeeklySummary() {
+        showWeeklySummary = false
+        presenter.dismissOverlay()
     }
 
     func dismissEndOfDaySummary() {

@@ -66,9 +66,9 @@ final class ReminderPanelController: ObservableObject {
     private var placementObserver: AnyCancellable?
 
     private static let collapsedSize = CGSize(width: 220, height: 56)
-    private static let expandedSize = CGSize(width: 320, height: 420)
-    /// Face window + up to two lines of title + buttons.
-    static let liveReminderSize = CGSize(width: 280, height: 204)
+    static let expandedSize = CGSize(width: 340, height: 480)
+    /// Face window + up to two lines of title + buttons + shortcut hint.
+    static let liveReminderSize = CGSize(width: 280, height: 222)
 
     /// Whether the panel was already visible/expanded before something
     /// force-presented itself (a live reminder, the end-of-day summary), so
@@ -315,6 +315,11 @@ final class ReminderPanelController: ObservableObject {
 
     /// Same idea, sized for the end-of-day summary (reuses the expanded size).
     func presentOverlay() {
+        // A reminder on screen goes first; the summary shows once it's answered.
+        if ReminderScheduler.shared.activeOccurrence != nil {
+            rememberStateBeforeOverlay()
+            return
+        }
         presentForced(size: Self.expandedSize, expanded: true)
     }
 
@@ -345,6 +350,23 @@ final class ReminderPanelController: ObservableObject {
     }
 
     private func restoreStateAfterOverlay() {
+        // Something else is still waiting behind the one just closed (say, the
+        // weekly summary behind a reminder): show that instead of closing.
+        let scheduler = ReminderScheduler.shared
+        if scheduler.activeOccurrence != nil {
+            if !scheduler.isLiveReminderSuspended {
+                show()
+                resize(to: Self.liveReminderSize, animated: true)
+            }
+            return
+        }
+        if scheduler.showEndOfDaySummary || scheduler.showWeeklySummary {
+            isExpanded = true
+            show()
+            resize(to: Self.expandedSize, animated: true)
+            return
+        }
+
         let previous = stateBeforeOverlay ?? (false, false)
         stateBeforeOverlay = nil
 

@@ -26,6 +26,10 @@ final class ReminderSchedulerTests: XCTestCase {
     private var clock = Date(timeIntervalSinceReferenceDate: 800_000_000)
     private var suppressed = false
     private var escalation = EscalationSettings(maxReminders: 3, intervalMinutes: 15)
+    private var away = false
+    private var snoozeDefault = 5
+    private var resumedTitles: [String] = []
+    private var weekly: PersistedSettings<WeeklySummarySettings>!
     private var scheduler: ReminderScheduler!
 
     /// Fresh in-memory store + scheduler for each test (XCTest makes a new
@@ -37,11 +41,16 @@ final class ReminderSchedulerTests: XCTestCase {
         )
         context = container.mainContext
         presenter = FakePresenter()
+        weekly = .testing(WeeklySummarySettings(isEnabled: false))
         scheduler = ReminderScheduler(
             presenter: presenter,
             now: { [unowned self] in self.clock },
             shouldSuppress: { [unowned self] in self.suppressed },
-            escalationSettings: { [unowned self] in self.escalation }
+            escalationSettings: { [unowned self] in self.escalation },
+            isAway: { [unowned self] in self.away },
+            defaultSnoozeMinutes: { [unowned self] in self.snoozeDefault },
+            resumed: { [unowned self] in self.resumedTitles.append($0.title) },
+            weeklySettings: weekly
         )
         scheduler.attach(modelContext: context)
     }
@@ -313,5 +322,229 @@ final class ReminderSchedulerTests: XCTestCase {
         scheduler.markDone()
         advance(minutes: 1); scheduler.tick()
         XCTAssertEqual(scheduler.activeOccurrence?.item?.title, "Stretch")
+    }
+
+    // MARK: - Snooze lengths
+
+    func testSnoozeForAChosenLength() throws {
+        try makeFixture()
+        addRepeating(everyMinutes: 600)
+        scheduler.tick()
+        scheduler.snooze(minutes: 30)
+        XCTAssertEqual(occurrences().first?.snoozedMinutes, 30)
+        advance(minutes: 29); scheduler.tick()
+        XCTAssertEqual(presenter.liveShown, 1, "not before 30 minutes")
+        advance(minutes: 1.1); scheduler.tick()
+        XCTAssertEqual(presenter.liveShown, 2)
+
+        scheduler.snooze(minutes: 15)
+        XCTAssertEqual(occurrences().first?.snoozedMinutes, 45, "snoozes add up")
+    }
+
+    func testPlainSnoozeUsesTheDefaultLength() throws {
+        try makeFixture()
+        snoozeDefault = 15
+        addRepeating(everyMinutes: 600)
+        scheduler.tick()
+        scheduler.snooze()
+        advance(minutes: 14); scheduler.tick()
+        XCTAssertEqual(presenter.liveShown, 1)
+        advance(minutes: 1.1); scheduler.tick()
+        XCTAssertEqual(presenter.liveShown, 2)
+    }
+
+    // MARK: - Pause for a while
+
+    func testTimedPauseResumesByItself() throws {
+        try makeFixture()
+        let item = addRepeating(everyMinutes: 40)
+        ItemActions.pause(item, until: clock.addingTimeInterval(3600), in: context,
+                          scheduler: scheduler, cancelNotifications: { _ in })
+        XCTAssertFalse(item.isActive)
+        XCTAssertNil(item.nextFireDate)
+
+        advance(minutes: 59); scheduler.tick()
+        XCTAssertEqual(presenter.liveShown, 0, "quiet while paused")
+        XCTAssertFalse(item.isActive)
+
+        advance(minutes: 1.5); scheduler.tick()
+        XCTAssertTrue(item.isActive, "back on after the hour")
+        XCTAssertNil(item.pausedUntil)
+        XCTAssertEqual(resumedTitles, ["Drink water"], "notifications re-scheduled")
+        XCTAssertEqual(item.nextFireDate, clock.addingTimeInterval(40 * 60), "next one counted from the resume")
+    }
+
+    func testPauseWithNoEndStaysPaused() throws {
+        try makeFixture()
+        let item = addRepeating(everyMinutes: 40)
+        ItemActions.pause(item, until: nil, in: context, scheduler: scheduler, cancelNotifications: { _ in })
+        advance(minutes: 60 * 24 * 3); scheduler.tick()
+        XCTAssertFalse(item.isActive)
+        XCTAssertEqual(presenter.liveShown, 0)
+    }
+
+    func testPausingTheRoutineOnScreenClosesIt() throws {
+        try makeFixture()
+        let item = addRepeating(everyMinutes: 40)
+        scheduler.tick()
+        XCTAssertNotNil(scheduler.activeOccurrence)
+        ItemActions.pause(item, until: nil, in: context, scheduler: scheduler, cancelNotifications: { _ in })
+        XCTAssertNil(scheduler.activeOccurrence)
+        XCTAssertEqual(presenter.liveDismissed, 1)
+        XCTAssertEqual(occurrences().first?.status, .skipped)
+    }
+
+    func testPausingSetsAsideASnoozedReminder() throws {
+        try makeFixture()
+        let item = addRepeating(everyMinutes: 600)
+        scheduler.tick()
+        scheduler.snooze(minutes: 5)
+        ItemActions.pause(item, until: clock.addingTimeInterval(600), in: context,
+                          scheduler: scheduler, cancelNotifications: { _ in })
+        advance(minutes: 6); scheduler.tick()
+        XCTAssertEqual(presenter.liveShown, 1, "the snoozed one doesn't come back during the pause")
+        XCTAssertEqual(occurrences().first?.status, .skipped)
+    }
+
+    // MARK: - Away from the Mac
+
+    func testRemindersWaitWhileAwayWithoutUsingAttempts() throws {
+        try makeFixture()
+        away = true
+        addRepeating(everyMinutes: 600)
+        scheduler.tick()
+        XCTAssertEqual(presenter.liveShown, 0, "held while nobody's there")
+        XCTAssertEqual(occurrences().first?.remindersSentCount, 0)
+
+        advance(minutes: 30); scheduler.tick()
+        XCTAssertEqual(presenter.liveShown, 0)
+
+        away = false
+        advance(minutes: 1); scheduler.tick()
+        XCTAssertEqual(presenter.liveShown, 1, "shown on return")
+        XCTAssertEqual(occurrences().first?.remindersSentCount, 1, "first pop, not a nag")
+    }
+
+    func testOnScreenReminderDoesNotNagAnEmptyRoom() throws {
+        try makeFixture()
+        addRepeating(everyMinutes: 600)
+        scheduler.tick()
+        away = true
+        advance(minutes: 15.1); scheduler.tick()
+        advance(minutes: 15.1); scheduler.tick()
+        XCTAssertEqual(occurrences().first?.remindersSentCount, 1)
+        XCTAssertEqual(occurrences().first?.status, .pending, "not run out while away")
+
+        away = false
+        advance(minutes: 1); scheduler.tick()
+        XCTAssertEqual(occurrences().first?.remindersSentCount, 2, "nags resume when back")
+    }
+
+    // MARK: - Weekly summary
+
+    func testWeeklySummaryShowsOncePerWeek() throws {
+        try makeFixture()
+        let calendar = Calendar.current
+        var settings = WeeklySummarySettings(isEnabled: true)
+        settings.weekday = calendar.component(.weekday, from: clock)
+        let minutes = calendar.component(.hour, from: clock) * 60 + calendar.component(.minute, from: clock)
+        let at = max(0, minutes - 1)
+        settings.hour = at / 60
+        settings.minute = at % 60
+        weekly.value = settings
+
+        scheduler.tick()
+        XCTAssertTrue(scheduler.showWeeklySummary)
+        XCTAssertEqual(weekly.value.lastShownWeekKey, Insights.weekKey(for: clock))
+
+        scheduler.dismissWeeklySummary()
+        advance(minutes: 30); scheduler.tick()
+        XCTAssertFalse(scheduler.showWeeklySummary, "only once that week")
+    }
+
+    func testWeeklySummaryTimingRules() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        // Sunday 2026-10-11, 18:59 and 19:00 UTC.
+        let before = calendar.date(from: DateComponents(year: 2026, month: 10, day: 11, hour: 18, minute: 59))!
+        let at = calendar.date(from: DateComponents(year: 2026, month: 10, day: 11, hour: 19))!
+        var settings = WeeklySummarySettings(isEnabled: true, weekday: 1, hour: 19, minute: 0)
+        XCTAssertFalse(ReminderScheduler.shouldShowWeeklySummary(settings: settings, now: before, calendar: calendar))
+        XCTAssertTrue(ReminderScheduler.shouldShowWeeklySummary(settings: settings, now: at, calendar: calendar))
+        let monday = calendar.date(byAdding: .day, value: 1, to: at)!
+        XCTAssertFalse(ReminderScheduler.shouldShowWeeklySummary(settings: settings, now: monday, calendar: calendar),
+                       "only on the chosen day")
+        settings.lastShownWeekKey = Insights.weekKey(for: at, calendar: calendar)
+        XCTAssertFalse(ReminderScheduler.shouldShowWeeklySummary(settings: settings, now: at, calendar: calendar))
+        settings.isEnabled = false
+        settings.lastShownWeekKey = nil
+        XCTAssertFalse(ReminderScheduler.shouldShowWeeklySummary(settings: settings, now: at, calendar: calendar))
+    }
+
+    // MARK: - Keyboard shortcuts
+
+    func testShortcutIsHandedToTheCard() throws {
+        try makeFixture()
+        addRepeating(everyMinutes: 600)
+        scheduler.tick()
+        scheduler.requestShortcut(.done)
+        XCTAssertEqual(scheduler.shortcutRequest?.action, .done)
+        scheduler.consumeShortcut()
+        XCTAssertNil(scheduler.shortcutRequest)
+    }
+
+    func testShortcutWithNothingOnScreenDoesNothing() throws {
+        try makeFixture()
+        scheduler.requestShortcut(.skip)
+        XCTAssertNil(scheduler.shortcutRequest)
+    }
+
+    func testShortcutWhileTuckedAwayActsDirectly() throws {
+        try makeFixture()
+        addRepeating(everyMinutes: 600)
+        scheduler.tick()
+        suppressed = true
+        scheduler.tick()
+        XCTAssertTrue(scheduler.isLiveReminderSuspended)
+        scheduler.requestShortcut(.done)
+        XCTAssertEqual(occurrences().first?.status, .done)
+        XCTAssertNil(scheduler.activeOccurrence)
+    }
+
+    func testUnhandledShortcutStillActs() async throws {
+        try makeFixture()
+        addRepeating(everyMinutes: 600)
+        scheduler.tick()
+        scheduler.requestShortcut(.skip)
+        try await Task.sleep(for: .milliseconds(2300))
+        XCTAssertEqual(occurrences().first?.status, .skipped, "never lost, even if the card didn't pick it up")
+    }
+
+    // MARK: - Checklist
+
+    func testTickingOffTheReminderOnScreenAnswersIt() throws {
+        try makeFixture()
+        addRepeating(everyMinutes: 600)
+        scheduler.tick()
+        let occurrence = try XCTUnwrap(occurrences().first)
+        OccurrenceActions.toggle(occurrence, now: clock, scheduler: scheduler)
+        XCTAssertEqual(occurrence.status, .done)
+        XCTAssertNil(scheduler.activeOccurrence)
+        XCTAssertEqual(presenter.liveDismissed, 1)
+    }
+
+    func testUntickingDoesNotHoldUpTheNextReminder() throws {
+        try makeFixture()
+        let item = addRepeating(everyMinutes: 60)
+        scheduler.tick()
+        scheduler.markDone()
+        let occurrence = try XCTUnwrap(occurrences().first)
+        OccurrenceActions.toggle(occurrence, now: clock, scheduler: scheduler)
+        XCTAssertEqual(occurrence.status, .unfinished, "not done = missed")
+        XCTAssertNil(occurrence.nextEscalationAt)
+
+        advance(minutes: 61); scheduler.tick()
+        XCTAssertEqual(presenter.liveShown, 2, "the routine carries on")
+        XCTAssertNotNil(item.nextFireDate)
     }
 }

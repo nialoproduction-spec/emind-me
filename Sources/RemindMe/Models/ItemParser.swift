@@ -11,6 +11,8 @@ struct ParsedItem {
     var minute: Int?
     var weekdays: Set<Int>
     var targetDate: Date?
+    /// From a hashtag in the text ("#work" → "Work").
+    var category: String? = nil
 
     /// Schedule description for the confirmation banner (title shown separately).
     var detailLine: String {
@@ -45,6 +47,31 @@ struct ParsedItem {
 /// app's "no cloud, no account" brief, and keeps this instant.
 enum ItemParser {
     static func parse(_ raw: String) -> ParsedItem {
+        // Hashtags first: "#work" anywhere sets the category and is taken out
+        // of the text before anything else reads it.
+        let (withoutTags, category) = extractCategory(from: raw)
+        var parsed = parseSchedule(withoutTags)
+        parsed.category = category
+        return parsed
+    }
+
+    /// The first "#tag" becomes the category (capitalised); all tags are removed.
+    static func extractCategory(from text: String) -> (text: String, category: String?) {
+        let ns = text as NSString
+        let matches = hashtagRegex.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        guard let first = matches.first else { return (text, nil) }
+        let tag = ns.substring(with: first.range(at: 1))
+        let category = tag.prefix(1).uppercased() + tag.dropFirst().lowercased()
+        let stripped = NSMutableString(string: text)
+        for match in matches.reversed() { stripped.deleteCharacters(in: match.range) }
+        let cleaned = (stripped as String)
+            .components(separatedBy: .whitespaces).filter { !$0.isEmpty }.joined(separator: " ")
+        return (cleaned, category)
+    }
+
+    private static let hashtagRegex = try! NSRegularExpression(pattern: #"#(\p{L}[\p{L}\p{N}_-]*)"#)
+
+    private static func parseSchedule(_ raw: String) -> ParsedItem {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return ParsedItem(kind: .goal, title: "Untitled", intervalSeconds: nil,

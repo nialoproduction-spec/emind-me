@@ -2,8 +2,8 @@ import SwiftUI
 import SwiftData
 
 /// Root of the panel's SwiftUI content. Layers, in priority order: a live
-/// reminder (routine just fired) overrides everything; the end-of-day
-/// summary overrides the ordinary views; otherwise it's the collapsed pill
+/// reminder (routine just fired) overrides everything; the end-of-day and
+/// weekly summaries override the ordinary views; otherwise it's the collapsed pill
 /// or the expanded list. The controller owns the window itself — its size,
 /// and when it fades in and out — and this view draws whichever layer
 /// applies.
@@ -22,6 +22,7 @@ struct PanelRootView: View {
     private enum Layer {
         case live(Occurrence)
         case endOfDay
+        case weekly
         case expanded
         case pill
     }
@@ -29,6 +30,7 @@ struct PanelRootView: View {
     private var layer: Layer {
         if let occurrence = scheduler.activeOccurrence { return .live(occurrence) }
         if scheduler.showEndOfDaySummary { return .endOfDay }
+        if scheduler.showWeeklySummary { return .weekly }
         if controller.isHiding, let held = heldOverlay { return held }
         return controller.isExpanded ? .expanded : .pill
     }
@@ -58,9 +60,18 @@ struct PanelRootView: View {
                     onDismiss: { scheduler.dismissEndOfDaySummary() }
                 )
                 .transition(.opacity)
+            case .weekly:
+                WeeklySummaryView(
+                    items: items,
+                    occurrences: occurrences,
+                    theme: themeStore.theme,
+                    onClose: { scheduler.dismissWeeklySummary() }
+                )
+                .transition(.opacity)
             case .expanded:
                 ExpandedPanelView(
                     items: items,
+                    occurrences: occurrences,
                     todayOccurrences: todayOccurrences,
                     theme: themeStore.theme,
                     onCollapse: collapse,
@@ -93,6 +104,13 @@ struct PanelRootView: View {
         .onChange(of: scheduler.showEndOfDaySummary) {
             if scheduler.showEndOfDaySummary {
                 heldOverlay = .endOfDay
+            } else if !controller.isHiding {
+                heldOverlay = nil
+            }
+        }
+        .onChange(of: scheduler.showWeeklySummary) {
+            if scheduler.showWeeklySummary {
+                heldOverlay = .weekly
             } else if !controller.isHiding {
                 heldOverlay = nil
             }

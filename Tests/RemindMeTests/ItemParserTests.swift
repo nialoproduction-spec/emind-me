@@ -168,4 +168,38 @@ final class ItemParserTests: XCTestCase {
         XCTAssertEqual(Item.durationString(3 * 86400), "3 days")
         XCTAssertEqual(Item.durationString(604800), "1 week")
     }
+
+    // MARK: - Categories from hashtags
+
+    func testHashtagSetsTheCategoryAndIsRemoved() {
+        let p = ItemParser.parse("drink water every 40 minutes #health")
+        XCTAssertEqual(p.category, "Health")
+        XCTAssertEqual(p.kind, .repeatingRoutine)
+        XCTAssertEqual(p.intervalSeconds, 40 * 60)
+        XCTAssertEqual(p.title, "Drink water")
+    }
+
+    func testHashtagAtTheStartAndFirstTagWins() {
+        let p = ItemParser.parse("#WORK #home standup at 9:30am on weekdays")
+        XCTAssertEqual(p.category, "Work")
+        XCTAssertEqual(p.kind, .scheduledRoutine)
+        XCTAssertEqual(p.hour, 9)
+        XCTAssertEqual(p.minute, 30)
+        XCTAssertFalse(p.title.contains("#"))
+    }
+
+    func testNoHashtagNoCategory() {
+        XCTAssertNil(ItemParser.parse("walk at 4am every day").category)
+    }
+
+    func testNumberSignIsNotATag() {
+        let p = ItemParser.parse("clean room #4")
+        XCTAssertNil(p.category)
+    }
+
+    func testItemCarriesTheCategory() {
+        let item = Item(from: ItemParser.parse("go to Godavari #travel"))
+        XCTAssertEqual(item.category, "Travel")
+        XCTAssertEqual(item.kind, .goal)
+    }
 }

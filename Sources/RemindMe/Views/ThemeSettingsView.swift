@@ -52,6 +52,7 @@ struct ThemeSettingsView: View {
 
     private enum Tab: String, CaseIterable, Identifiable {
         case general = "General"
+        case smart = "Smart"
         case reminders = "Your reminders"
         var id: String { rawValue }
     }
@@ -74,6 +75,8 @@ struct ThemeSettingsView: View {
                     switch tab {
                     case .general:
                         generalContent
+                    case .smart:
+                        SmartSettingsView()
                     case .reminders:
                         ManageRemindersView()
                     }
@@ -85,7 +88,7 @@ struct ThemeSettingsView: View {
             if tab == .general {
                 actionButtons
             } else {
-                // Deletions take effect as soon as they're confirmed.
+                // These take effect right away (deletions once confirmed).
                 HStack {
                     Spacer()
                     Button("Done") { isPresented = false }

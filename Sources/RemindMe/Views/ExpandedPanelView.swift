@@ -12,8 +12,13 @@ final class PanelDraft: ObservableObject {
     private init() {}
 }
 
+/// The open panel: goals at the top, reminders (routines) in the middle,
+/// today's checklist at the bottom, and the add field. Every row is live —
+/// tap to open or tick off, swipe left for Edit / Delete, swipe right for a
+/// quick Done / Pause, right-click for the rest.
 struct ExpandedPanelView: View {
     let items: [Item]
+    let occurrences: [Occurrence]
     let todayOccurrences: [Occurrence]
     let theme: PanelTheme
     let onCollapse: () -> Void
@@ -21,65 +26,145 @@ struct ExpandedPanelView: View {
 
     @Environment(\.modelContext) private var modelContext
     @ObservedObject private var draft = PanelDraft.shared
+    @ObservedObject private var smart = AppSettings.smart
     @FocusState private var fieldFocused: Bool
 
-    private var routines: [Item] {
-        items.filter { $0.kind != .goal }
-            .sorted { $0.isActive != $1.isActive ? $0.isActive : $0.createdAt > $1.createdAt }
+    /// Inner pages, shown in place of the list.
+    @State private var editing: Item?
+    @State private var historyOf: Item?
+    @State private var showingWeekly = false
+    @State private var categoryFilter: String?
+    @State private var pendingDeletion: Deletion?
+
+    private enum Deletion: Identifiable {
+        case item(Item)
+        case entry(Occurrence)
+
+        var id: String {
+            switch self {
+            case .item(let item): return "item-\(item.id)"
+            case .entry(let occurrence): return "entry-\(occurrence.id)"
+            }
+        }
+    }
+
+    // MARK: - Lists
+
+    private func matchesFilter(_ item: Item?) -> Bool {
+        guard let categoryFilter else { return true }
+        return item?.category?.caseInsensitiveCompare(categoryFilter) == .orderedSame
     }
 
     private var goals: [Item] {
-        items.filter { $0.kind == .goal }
+        items.filter { $0.kind == .goal && matchesFilter($0) }
             .sorted { $0.isAchieved != $1.isAchieved ? !$0.isAchieved : $0.createdAt > $1.createdAt }
     }
 
-    private var sortedToday: [Occurrence] {
-        todayOccurrences.sorted { $0.scheduledFireDate < $1.scheduledFireDate }
+    private var routines: [Item] {
+        items.filter { $0.kind != .goal && matchesFilter($0) }
+            .sorted { $0.isActive != $1.isActive ? $0.isActive : $0.createdAt > $1.createdAt }
     }
 
-    private var todayDoneCount: Int { todayOccurrences.filter { $0.status == .done }.count }
+    private var sortedToday: [Occurrence] {
+        todayOccurrences.filter { matchesFilter($0.item) }
+            .sorted { $0.scheduledFireDate < $1.scheduledFireDate }
+    }
+
+    private var categoriesInUse: [String] {
+        var seen: [String] = []
+        for name in items.compactMap(\.category)
+        where !seen.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) {
+            seen.append(name)
+        }
+        return seen.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    private var suggestion: Insights.Suggestion? {
+        guard smart.value.suggestionsEnabled else { return nil }
+        let dismissed = Set(smart.value.dismissedSuggestions)
+        return Insights.suggestions(items: items, occurrences: occurrences)
+            .first { !dismissed.contains($0.id) }
+    }
+
+    private func streak(for item: Item) -> Int {
+        guard item.kind != .goal else { return 0 }
+        return Insights.streak(Insights.dailyRecords(Insights.occurrences(of: item, in: occurrences), days: 60, now: .now))
+    }
+
+    // MARK: - Body
 
     var body: some View {
+        Group {
+            if let item = editing {
+                EditItemView(item: item, theme: theme) { editing = nil }
+            } else if let item = historyOf {
+                ItemHistoryView(
+                    item: item,
+                    occurrences: occurrences,
+                    theme: theme,
+                    onBack: { historyOf = nil },
+                    onEdit: { editing = item },
+                    onPause: { pause(item, for: $0) },
+                    onResume: { ItemActions.resume(item) },
+                    onDelete: { pendingDeletion = .item(item) }
+                )
+            } else if showingWeekly {
+                WeeklySummaryView(items: items, occurrences: occurrences, theme: theme,
+                                  onClose: { showingWeekly = false }, closeIcon: "chevron.backward.circle.fill")
+            } else {
+                mainPage
+            }
+        }
+        // Typing counts as using the panel, even with the pointer elsewhere,
+        // so it never fades out mid-sentence.
+        .onChange(of: draft.text) { ReminderPanelController.shared.noteActivity() }
+        .confirmationDialog(
+            deletionTitle,
+            isPresented: Binding(get: { pendingDeletion != nil }, set: { if !$0 { pendingDeletion = nil } }),
+            titleVisibility: .visible,
+            presenting: pendingDeletion
+        ) { target in
+            Button("Delete", role: .destructive) { performDeletion(target) }
+            Button("Cancel", role: .cancel) { pendingDeletion = nil }
+        } message: { target in
+            switch target {
+            case .item(let item):
+                Text(item.kind == .goal
+                     ? "This goal will be removed."
+                     : "This reminder and its history will be removed. This can't be undone.")
+            case .entry:
+                Text("Removes this entry from today's list. The reminder itself stays.")
+            }
+        }
+    }
+
+    private var deletionTitle: String {
+        switch pendingDeletion {
+        case .item(let item): return "Delete “\(item.title)”?"
+        case .entry(let occurrence): return "Remove “\(occurrence.item?.title ?? "this entry")” from today?"
+        case nil: return "Delete?"
+        }
+    }
+
+    private var mainPage: some View {
         VStack(spacing: 0) {
             header
             Divider().opacity(0.15)
 
+            if !categoriesInUse.isEmpty {
+                categoryBar
+                Divider().opacity(0.1)
+            }
+
             if items.isEmpty {
                 emptyState
             } else {
-                List {
-                    if !todayOccurrences.isEmpty {
-                        Section("Today — \(todayDoneCount) of \(todayOccurrences.count) done") {
-                            ForEach(sortedToday) { occurrence in
-                                ChecklistRowView(occurrence: occurrence, theme: theme)
-                                    .listRowBackground(Color.clear)
-                                    .listRowSeparatorTint(Color.white.opacity(0.08))
-                            }
-                        }
-                    }
-                    if !routines.isEmpty {
-                        Section("Routines") {
-                            ForEach(routines) { item in
-                                ReminderRowView(item: item, theme: theme, onToggle: { toggle(item) })
-                                    .listRowBackground(Color.clear)
-                                    .listRowSeparatorTint(Color.white.opacity(0.08))
-                            }
-                            .onDelete { delete(routines, at: $0) }
-                        }
-                    }
-                    if !goals.isEmpty {
-                        Section("Goals") {
-                            ForEach(goals) { item in
-                                ReminderRowView(item: item, theme: theme, onToggle: { toggle(item) })
-                                    .listRowBackground(Color.clear)
-                                    .listRowSeparatorTint(Color.white.opacity(0.08))
-                            }
-                            .onDelete { delete(goals, at: $0) }
-                        }
-                    }
-                }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
+                list
+            }
+
+            if let suggestion {
+                Divider().opacity(0.15)
+                suggestionBar(suggestion)
             }
 
             Divider().opacity(0.15)
@@ -89,22 +174,165 @@ struct ExpandedPanelView: View {
             }
             inputRow
         }
-        // Typing counts as using the panel, even with the pointer elsewhere,
-        // so it never fades out mid-sentence.
-        .onChange(of: draft.text) { ReminderPanelController.shared.noteActivity() }
     }
 
+    private var list: some View {
+        List {
+            if !goals.isEmpty {
+                Section("Goals") {
+                    ForEach(goals) { item in itemRow(item) }
+                }
+            }
+            if !routines.isEmpty {
+                Section("Reminders") {
+                    ForEach(routines) { item in itemRow(item) }
+                }
+            }
+            if !sortedToday.isEmpty {
+                let done = sortedToday.filter { $0.status == .done }.count
+                Section("Today — \(done) of \(sortedToday.count) done") {
+                    ForEach(sortedToday) { occurrence in checklistRow(occurrence) }
+                }
+            }
+            if goals.isEmpty && routines.isEmpty && sortedToday.isEmpty {
+                Text("Nothing in this category yet.")
+                    .font(theme.font)
+                    .foregroundStyle(theme.text.opacity(0.5))
+                    .listRowBackground(Color.clear)
+            }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+    }
+
+    // MARK: - Rows
+
+    private func itemRow(_ item: Item) -> some View {
+        ReminderRowView(
+            item: item,
+            theme: theme,
+            streak: streak(for: item),
+            onToggle: { toggle(item) },
+            onPause: { pause(item, for: $0) }
+        )
+        .onTapGesture { open(item) }
+        .listRowBackground(Color.clear)
+        .listRowSeparatorTint(Color.white.opacity(0.08))
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button { pendingDeletion = .item(item) } label: {
+                Label("Delete", systemImage: "trash")
+            }
+            .tint(.red)
+            Button { editing = item } label: {
+                Label("Edit", systemImage: "pencil")
+            }
+            .tint(.blue)
+        }
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            if item.kind == .goal {
+                Button { item.isAchieved.toggle() } label: {
+                    Label(item.isAchieved ? "Not yet" : "Achieved", systemImage: "checkmark")
+                }
+                .tint(theme.accent)
+            } else if item.isActive {
+                Button { pause(item, for: .oneHour) } label: {
+                    Label("Pause 1h", systemImage: "pause")
+                }
+                .tint(.orange)
+            } else {
+                Button { ItemActions.resume(item) } label: {
+                    Label("Resume", systemImage: "play")
+                }
+                .tint(theme.accent)
+            }
+        }
+        .contextMenu { itemMenu(item) }
+    }
+
+    @ViewBuilder
+    private func itemMenu(_ item: Item) -> some View {
+        Button("Edit…") { editing = item }
+        if item.kind == .goal {
+            Button(item.isAchieved ? "Mark not achieved" : "Mark achieved") { item.isAchieved.toggle() }
+        } else {
+            Button("History & streak") { historyOf = item }
+            if item.isActive {
+                Menu("Pause") {
+                    ForEach(ItemActions.PauseLength.allCases) { length in
+                        Button(length.label) { pause(item, for: length) }
+                    }
+                }
+            } else {
+                Button("Resume") { ItemActions.resume(item) }
+            }
+        }
+        Divider()
+        Button("Delete…", role: .destructive) { pendingDeletion = .item(item) }
+    }
+
+    private func checklistRow(_ occurrence: Occurrence) -> some View {
+        ChecklistRowView(occurrence: occurrence, theme: theme) {
+            OccurrenceActions.toggle(occurrence)
+        }
+        .listRowBackground(Color.clear)
+        .listRowSeparatorTint(Color.white.opacity(0.08))
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button { pendingDeletion = .entry(occurrence) } label: {
+                Label("Delete", systemImage: "trash")
+            }
+            .tint(.red)
+            if let item = occurrence.item {
+                Button { editing = item } label: {
+                    Label("Edit", systemImage: "pencil")
+                }
+                .tint(.blue)
+            }
+        }
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            Button { OccurrenceActions.toggle(occurrence) } label: {
+                Label(occurrence.status == .done ? "Undo" : "Done",
+                      systemImage: occurrence.status == .done ? "arrow.uturn.backward" : "checkmark")
+            }
+            .tint(theme.accent)
+        }
+        .contextMenu {
+            Button("Done") { OccurrenceActions.set(occurrence, to: .done) }
+                .disabled(occurrence.status == .done)
+            Button("Skipped") { OccurrenceActions.set(occurrence, to: .skipped) }
+                .disabled(occurrence.status == .skipped)
+            Button("Not done") { OccurrenceActions.set(occurrence, to: .unfinished) }
+                .disabled(occurrence.status == .unfinished)
+            if let item = occurrence.item {
+                Divider()
+                Button("Edit reminder…") { editing = item }
+                Button("History & streak") { historyOf = item }
+            }
+            Divider()
+            Button("Remove from today…", role: .destructive) { pendingDeletion = .entry(occurrence) }
+        }
+    }
+
+    // MARK: - Header, filter, suggestion
+
     private var header: some View {
-        HStack {
+        HStack(spacing: 12) {
             Text("Remind Me")
                 .font(theme.titleFont)
                 .foregroundStyle(theme.text)
             Spacer()
-            Button(action: onShowSettings) {
-                Image(systemName: "paintbrush")
+            Button { showingWeekly = true } label: {
+                Image(systemName: "chart.bar.xaxis")
             }
             .buttonStyle(.plain)
             .foregroundStyle(theme.text.opacity(0.7))
+            .help("Weekly summary")
+
+            Button(action: onShowSettings) {
+                Image(systemName: "gearshape")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(theme.text.opacity(0.7))
+            .help("Settings")
 
             Button(action: onCollapse) {
                 Image(systemName: "chevron.up")
@@ -117,6 +345,44 @@ struct ExpandedPanelView: View {
         .contentShape(Rectangle())
     }
 
+    private var categoryBar: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 5) {
+                filterChip("All", selected: categoryFilter == nil, color: theme.accent) { categoryFilter = nil }
+                ForEach(categoriesInUse, id: \.self) { name in
+                    filterChip(name, selected: categoryFilter == name, color: CategoryStyle.color(for: name)) {
+                        categoryFilter = categoryFilter == name ? nil : name
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+        }
+        .scrollIndicators(.never)
+    }
+
+    private func filterChip(_ label: String, selected: Bool, color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: theme.fontSize - 2, weight: selected ? .semibold : .regular))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .foregroundStyle(selected ? color : theme.text.opacity(0.65))
+                .background(selected ? color.opacity(0.2) : theme.text.opacity(0.06))
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func suggestionBar(_ suggestion: Insights.Suggestion) -> some View {
+        SuggestionBar(
+            suggestion: suggestion,
+            theme: theme,
+            onApply: { apply(suggestion) },
+            onDismiss: { dismiss(suggestion) }
+        )
+    }
+
     private var emptyState: some View {
         VStack(spacing: 6) {
             Spacer()
@@ -126,6 +392,9 @@ struct ExpandedPanelView: View {
             Text("Type a routine or a goal below")
                 .font(theme.font)
                 .foregroundStyle(theme.text.opacity(0.5))
+            Text("Add #work or #health to tag it")
+                .font(.system(size: theme.fontSize - 2))
+                .foregroundStyle(theme.text.opacity(0.35))
             Spacer()
         }
         .frame(maxWidth: .infinity)
@@ -139,10 +408,15 @@ struct ExpandedPanelView: View {
                 .foregroundStyle(theme.accent)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text("\(parsed.kindLabel) · \(parsed.title)")
-                    .font(theme.font.weight(.semibold))
-                    .foregroundStyle(theme.text)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text("\(parsed.kindLabel) · \(parsed.title)")
+                        .font(theme.font.weight(.semibold))
+                        .foregroundStyle(theme.text)
+                        .lineLimit(1)
+                    if let category = parsed.category {
+                        CategoryTag(name: category, theme: theme)
+                    }
+                }
                 if !parsed.detailLine.isEmpty {
                     Text(parsed.detailLine)
                         .font(.system(size: theme.fontSize - 2))
@@ -191,7 +465,7 @@ struct ExpandedPanelView: View {
 
     private var inputRow: some View {
         HStack(spacing: 8) {
-            TextField("Drink water every 40 minutes…", text: $draft.text)
+            TextField("Drink water every 40 minutes #health", text: $draft.text)
                 .textFieldStyle(.plain)
                 .font(theme.font)
                 .foregroundStyle(theme.text)
@@ -211,6 +485,14 @@ struct ExpandedPanelView: View {
 
     // MARK: - Actions
 
+    private func open(_ item: Item) {
+        if item.kind == .goal {
+            editing = item
+        } else {
+            historyOf = item
+        }
+    }
+
     private func handleSubmit() {
         let trimmed = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -220,12 +502,20 @@ struct ExpandedPanelView: View {
     private func saveConfirmed() {
         guard let pending = draft.pending else { return }
         let item = Item(from: pending)
+        if let category = pending.category { rememberCategory(category) }
         modelContext.insert(item)
         NotificationService.shared.schedule(for: item)
         draft.text = ""
         draft.pending = nil
         // Added: the panel tucks itself away (after a beat, so the save registers).
         ReminderPanelController.shared.closeAfterAdding()
+    }
+
+    /// A new #tag joins the category list, so it can be picked when editing.
+    private func rememberCategory(_ name: String) {
+        let store = AppSettings.categories
+        guard !store.value.names.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) else { return }
+        store.value.names.append(name)
     }
 
     private func cancelConfirmation() {
@@ -244,24 +534,82 @@ struct ExpandedPanelView: View {
     private func toggle(_ item: Item) {
         if item.kind == .goal {
             item.isAchieved.toggle()
+        } else if item.isActive {
+            pause(item, for: .indefinitely)
         } else {
-            item.isActive.toggle()
-            if item.isActive {
-                // Stale from before the pause — recompute from now rather
-                // than resuming against a timestamp that may be in the past.
-                item.nextFireDate = item.computeNextFireDate()
-                NotificationService.shared.schedule(for: item)
-            } else {
-                item.nextFireDate = nil
-                NotificationService.shared.cancel(for: item)
-            }
+            ItemActions.resume(item)
         }
     }
 
-    private func delete(_ list: [Item], at offsets: IndexSet) {
-        for index in offsets {
+    private func pause(_ item: Item, for length: ItemActions.PauseLength) {
+        ItemActions.pause(item, until: length.endDate(from: .now), in: modelContext)
+    }
+
+    private func performDeletion(_ target: Deletion) {
+        pendingDeletion = nil
+        switch target {
+        case .item(let item):
+            if editing?.persistentModelID == item.persistentModelID { editing = nil }
+            if historyOf?.persistentModelID == item.persistentModelID { historyOf = nil }
             // Removes the item's occurrences too (see ItemDeletion).
-            ItemDeletion.delete(list[index], in: modelContext)
+            ItemDeletion.delete(item, in: modelContext)
+        case .entry(let occurrence):
+            OccurrenceActions.delete(occurrence, in: modelContext)
         }
+    }
+
+    private func apply(_ suggestion: Insights.Suggestion) {
+        guard let item = items.first(where: { $0.persistentModelID == suggestion.itemID }) else { return }
+        ItemActions.apply(suggestion, to: item)
+        dismiss(suggestion)
+    }
+
+    private func dismiss(_ suggestion: Insights.Suggestion) {
+        guard !smart.value.dismissedSuggestions.contains(suggestion.id) else { return }
+        smart.value.dismissedSuggestions.append(suggestion.id)
+    }
+}
+
+/// A smart suggestion above the add field: "You usually do this at 4:35 —
+/// move it there?" with Apply and ✕.
+struct SuggestionBar: View {
+    let suggestion: Insights.Suggestion
+    let theme: PanelTheme
+    let onApply: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "lightbulb.fill")
+                .foregroundStyle(Color.yellow.opacity(0.9))
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(suggestion.message)
+                    .font(.system(size: theme.fontSize - 1))
+                    .foregroundStyle(theme.text.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+                Button(action: onApply) {
+                    Text(suggestion.actionLabel)
+                        .font(.system(size: theme.fontSize - 2, weight: .semibold))
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 3)
+                        .background(theme.accent.opacity(0.2))
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(theme.accent)
+            }
+            Spacer(minLength: 0)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(theme.text.opacity(0.4))
+            .help("Don't suggest this")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.yellow.opacity(0.06))
     }
 }
