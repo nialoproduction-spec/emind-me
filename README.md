@@ -74,6 +74,18 @@ xcrun stapler staple "dist/Remind Me.dmg"
   never activates the app or steals focus from whatever app is frontmost.
   Collapse/expand is an animated `NSPanel.setFrame`, anchored at the
   top-left corner so growing never jumps the panel somewhere unexpected.
+- **Auto-hide** (`PanelAutoHide`) — the panel behaves like a notification,
+  fading in and out (0.18s / 0.3s) instead of staying on screen:
+  - The time / next-reminder pill appears on a menu bar click and fades
+    out after 6 seconds; it stays while the pointer is on it and goes 2
+    seconds after the pointer leaves. A click anywhere else hides it at once.
+  - The expanded list stays while it's being used, and fades out on a click
+    elsewhere or after 15 seconds with no pointer or typing. Never while the
+    settings sheet is open. Half-typed text and a pending confirmation are
+    kept (`PanelDraft`) and are still there next time.
+  - A live reminder or the end-of-day summary fades away when it's done
+    rather than leaving the pill stuck; if the list was open when a reminder
+    interrupted, it goes back to the list. Reminder timing is untouched.
 - **Storage** (`Item`, `PersistenceController`) — a SwiftData `@Model`
   covering all three kinds, local `ModelConfiguration` with
   `cloudKitDatabase: .none`.

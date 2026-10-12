@@ -1,6 +1,17 @@
 import SwiftUI
 import SwiftData
 
+/// What's been typed in the panel but not saved yet. Lives outside the view
+/// so it survives the panel fading away and coming back: a half-typed
+/// reminder or a confirmation waiting for Save is still there next time.
+@MainActor
+final class PanelDraft: ObservableObject {
+    static let shared = PanelDraft()
+    @Published var text = ""
+    @Published var pending: ParsedItem?
+    private init() {}
+}
+
 struct ExpandedPanelView: View {
     let items: [Item]
     let todayOccurrences: [Occurrence]
@@ -9,8 +20,7 @@ struct ExpandedPanelView: View {
     let onShowSettings: () -> Void
 
     @Environment(\.modelContext) private var modelContext
-    @State private var inputText = ""
-    @State private var pending: ParsedItem?
+    @ObservedObject private var draft = PanelDraft.shared
     @FocusState private var fieldFocused: Bool
 
     private var routines: [Item] {
@@ -73,12 +83,15 @@ struct ExpandedPanelView: View {
             }
 
             Divider().opacity(0.15)
-            if let pending {
+            if let pending = draft.pending {
                 confirmationBar(pending)
                 Divider().opacity(0.15)
             }
             inputRow
         }
+        // Typing counts as using the panel, even with the pointer elsewhere,
+        // so it never fades out mid-sentence.
+        .onChange(of: draft.text) { ReminderPanelController.shared.noteActivity() }
     }
 
     private var header: some View {
@@ -178,7 +191,7 @@ struct ExpandedPanelView: View {
 
     private var inputRow: some View {
         HStack(spacing: 8) {
-            TextField("Drink water every 40 minutes…", text: $inputText)
+            TextField("Drink water every 40 minutes…", text: $draft.text)
                 .textFieldStyle(.plain)
                 .font(theme.font)
                 .foregroundStyle(theme.text)
@@ -190,7 +203,7 @@ struct ExpandedPanelView: View {
                     .foregroundStyle(theme.accent)
             }
             .buttonStyle(.plain)
-            .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty)
+            .disabled(draft.text.trimmingCharacters(in: .whitespaces).isEmpty)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -199,31 +212,31 @@ struct ExpandedPanelView: View {
     // MARK: - Actions
 
     private func handleSubmit() {
-        let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        pending = ItemParser.parse(trimmed)
+        draft.pending = ItemParser.parse(trimmed)
     }
 
     private func saveConfirmed() {
-        guard let pending else { return }
+        guard let pending = draft.pending else { return }
         let item = Item(from: pending)
         modelContext.insert(item)
         NotificationService.shared.schedule(for: item)
-        inputText = ""
-        self.pending = nil
+        draft.text = ""
+        draft.pending = nil
         fieldFocused = true
     }
 
     private func cancelConfirmation() {
-        inputText = ""
-        pending = nil
+        draft.text = ""
+        draft.pending = nil
         fieldFocused = true
     }
 
     /// Dismisses the confirmation but keeps the typed text, so the person
     /// can tweak it and submit again rather than retyping from scratch.
     private func editConfirmation() {
-        pending = nil
+        draft.pending = nil
         fieldFocused = true
     }
 

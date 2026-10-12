@@ -22,7 +22,9 @@ final class ReminderPanel: NSPanel {
         isReleasedWhenClosed = false
         isMovableByWindowBackground = true
         hidesOnDeactivate = false
-        animationBehavior = .utilityWindow
+        // The controller fades the panel in and out itself; no system
+        // window animation on top of that.
+        animationBehavior = .none
         level = .floating
         // Visible on every Space, including over full-screen apps, and not
         // listed in the Space-cycling / Mission Control app switcher.

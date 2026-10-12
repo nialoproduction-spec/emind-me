@@ -1,21 +1,37 @@
 import SwiftUI
 import SwiftData
 
-/// Root of the panel's SwiftUI content. Three layers, in priority order:
-/// a live reminder (routine just fired) overrides everything; the
-/// end-of-day summary overrides the ordinary expand/collapse; otherwise
-/// it's just the collapsed pill or the expanded list, as toggled by the
-/// user. The controller owns the actual window resize animation for all of
-/// these, this view just asks for it and draws whichever layer applies.
+/// Root of the panel's SwiftUI content. Layers, in priority order: a live
+/// reminder (routine just fired) overrides everything; the end-of-day
+/// summary overrides the ordinary views; otherwise it's the collapsed pill
+/// or the expanded list. The controller owns the window itself — its size,
+/// and when it fades in and out — and this view draws whichever layer
+/// applies.
 struct PanelRootView: View {
-    unowned let controller: ReminderPanelController
+    @ObservedObject var controller: ReminderPanelController
 
     @ObservedObject private var themeStore = ThemeStore.shared
     @ObservedObject private var scheduler = ReminderScheduler.shared
     @Query(sort: \Item.createdAt, order: .reverse) private var items: [Item]
     @Query(sort: \Occurrence.scheduledFireDate, order: .reverse) private var occurrences: [Occurrence]
-    @State private var isExpanded = false
     @State private var showingSettings = false
+    /// The reminder or summary that was on screen when the panel started to
+    /// fade out, kept so the fade shows it rather than a sudden swap to the pill.
+    @State private var heldOverlay: Layer?
+
+    private enum Layer {
+        case live(Occurrence)
+        case endOfDay
+        case expanded
+        case pill
+    }
+
+    private var layer: Layer {
+        if let occurrence = scheduler.activeOccurrence { return .live(occurrence) }
+        if scheduler.showEndOfDaySummary { return .endOfDay }
+        if controller.isHiding, let held = heldOverlay { return held }
+        return controller.isExpanded ? .expanded : .pill
+    }
 
     private var active: [Item] {
         items.filter { $0.kind == .goal ? !$0.isAchieved : $0.isActive }
@@ -30,18 +46,19 @@ struct PanelRootView: View {
         ZStack {
             background
 
-            if let occurrence = scheduler.activeOccurrence {
+            switch layer {
+            case .live(let occurrence):
                 LiveReminderView(occurrence: occurrence, theme: themeStore.theme)
                     .id(occurrence.id) // fresh face + reaction state for every reminder
                     .transition(.opacity)
-            } else if scheduler.showEndOfDaySummary {
+            case .endOfDay:
                 EndOfDaySummaryView(
                     occurrencesToday: todayOccurrences,
                     theme: themeStore.theme,
                     onDismiss: { scheduler.dismissEndOfDaySummary() }
                 )
                 .transition(.opacity)
-            } else if isExpanded {
+            case .expanded:
                 ExpandedPanelView(
                     items: items,
                     todayOccurrences: todayOccurrences,
@@ -50,7 +67,7 @@ struct PanelRootView: View {
                     onShowSettings: { showingSettings = true }
                 )
                 .transition(.opacity)
-            } else {
+            case .pill:
                 CollapsedPillView(
                     activeItems: active,
                     theme: themeStore.theme,
@@ -64,6 +81,25 @@ struct PanelRootView: View {
         .sheet(isPresented: $showingSettings) {
             ThemeSettingsView(isPresented: $showingSettings)
         }
+        // Remember the overlay while it's up; forget it once it's gone and
+        // the panel isn't mid-fade (e.g. it went back to the open list).
+        .onChange(of: scheduler.activeOccurrence?.id) {
+            if let occurrence = scheduler.activeOccurrence {
+                heldOverlay = .live(occurrence)
+            } else if !controller.isHiding {
+                heldOverlay = nil
+            }
+        }
+        .onChange(of: scheduler.showEndOfDaySummary) {
+            if scheduler.showEndOfDaySummary {
+                heldOverlay = .endOfDay
+            } else if !controller.isHiding {
+                heldOverlay = nil
+            }
+        }
+        .onChange(of: controller.isHiding) {
+            if !controller.isHiding { heldOverlay = nil }
+        }
     }
 
     private var background: some View {
@@ -76,12 +112,10 @@ struct PanelRootView: View {
     }
 
     private func expand() {
-        isExpanded = true
         controller.setExpanded(true)
     }
 
     private func collapse() {
-        isExpanded = false
         controller.setExpanded(false)
     }
 }
