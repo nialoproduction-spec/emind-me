@@ -1,6 +1,7 @@
 # Builds "Remind Me.dmg" on a GitHub-hosted Mac (which has full Xcode, so
-# the SwiftUI/SwiftData macro plugins are available) and attaches it to the
-# run as a downloadable artifact.
+# the SwiftUI/SwiftData macro plugins are available) and publishes it as a
+# GitHub Release, so the raw .dmg (not zipped) is downloadable from the
+# repo's Releases page.
 #
 # Runs on every push to main, or by hand: Actions tab -> Build DMG -> Run workflow.
 name: Build DMG
@@ -10,6 +11,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write   # needed to create the Release
+
 jobs:
   build:
     # Apple Silicon runner — build.sh refuses to build on Intel.
@@ -18,7 +22,7 @@ jobs:
 
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Show toolchain
         run: |
@@ -31,10 +35,13 @@ jobs:
           chmod +x build.sh
           ./build.sh
 
-      - name: Upload .dmg
-        uses: actions/upload-artifact@v4
-        with:
-          name: Remind-Me-dmg
-          path: dist/Remind Me.dmg
-          if-no-files-found: error
-          retention-days: 30
+      - name: Publish .dmg as a Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # GitHub turns spaces in asset names into dots, so give it a clean name.
+          cp "dist/Remind Me.dmg" "Remind-Me.dmg"
+          TAG="build-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" "Remind-Me.dmg" \
+            --title "Remind Me (build ${GITHUB_RUN_NUMBER})" \
+            --notes "Built from commit ${GITHUB_SHA::7}. Open the .dmg and drag Remind Me into Applications. First launch: right-click > Open, or System Settings > Privacy & Security > Open Anyway."
