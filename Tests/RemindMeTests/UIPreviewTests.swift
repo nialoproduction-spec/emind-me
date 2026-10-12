@@ -343,8 +343,8 @@ final class UIPreviewTests: XCTestCase {
         let walk = try XCTUnwrap(items.first { $0.title.hasPrefix("Walk") })
         let water = try XCTUnwrap(items.first { $0.title.hasPrefix("Drink") })
         let sheet = HStack(alignment: .top, spacing: 0) {
-            panel(width: 340, height: 480) { EditItemView(item: walk, theme: theme, onDone: {}) }
-            panel(width: 340, height: 480) { EditItemView(item: water, theme: theme, onDone: {}) }
+            panel(width: 340, height: 480) { EditItemView(item: walk, theme: theme, scrolls: false, onDone: {}) }
+            panel(width: 340, height: 480) { EditItemView(item: water, theme: theme, scrolls: false, onDone: {}) }
             panel(width: 340, height: 480) { SmartSettingsView().padding(14).environment(\.colorScheme, .dark) }
         }
         try save(sheet, as: "preview-11-edit-and-smart-settings.png")

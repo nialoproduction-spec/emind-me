@@ -14,11 +14,16 @@ struct ReminderRowView: View {
     /// Running routine: pause it for this long.
     var onPause: (ItemActions.PauseLength) -> Void = { _ in }
 
-    private static let pausedFormatter: DateFormatter = {
+    private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.doesRelativeDateFormatting = true
-        f.dateStyle = .short
+        f.dateStyle = .none
         f.timeStyle = .short
+        return f
+    }()
+
+    private static let dayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("EEE MMM d")
         return f
     }()
 
@@ -39,13 +44,13 @@ struct ReminderRowView: View {
                 }
 
                 HStack(spacing: 4) {
-                    if !item.scheduleSummary.isEmpty {
+                    if let paused = pausedLine {
+                        // Paused: say until when, instead of the schedule.
+                        Image(systemName: "pause.fill")
+                        Text(paused)
+                    } else if !item.scheduleSummary.isEmpty {
                         Image(systemName: kindIcon)
                         Text(item.scheduleSummary)
-                    }
-                    if let paused = pausedLine {
-                        Text(item.scheduleSummary.isEmpty ? paused : "· \(paused)")
-                            .foregroundStyle(Color.orange.opacity(0.85))
                     }
                 }
                 .font(.system(size: theme.fontSize - 2))
@@ -96,10 +101,12 @@ struct ReminderRowView: View {
 
     private var pausedLine: String? {
         guard item.kind != .goal, !item.isActive else { return nil }
-        if let until = item.pausedUntil {
-            return "paused until \(Self.pausedFormatter.string(from: until))"
-        }
-        return "paused"
+        guard let until = item.pausedUntil else { return "Paused · \(item.scheduleSummary)" }
+        let calendar = Calendar.current
+        let time = Self.timeFormatter.string(from: until)
+        if calendar.isDateInToday(until) { return "Paused until \(time)" }
+        if calendar.isDateInTomorrow(until) { return "Paused until tomorrow, \(time)" }
+        return "Paused until \(Self.dayFormatter.string(from: until))"
     }
 
     private var dimmed: Bool {

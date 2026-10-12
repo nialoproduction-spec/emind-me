@@ -7,6 +7,8 @@ struct EditItemView: View {
     let item: Item
     let theme: PanelTheme
     let onDone: () -> Void
+    /// Off only for previews (a scroll view doesn't render into an image).
+    var scrolls = true
 
     @ObservedObject private var categories = AppSettings.categories
 
@@ -41,10 +43,11 @@ struct EditItemView: View {
     @State private var targetDate: Date
     @FocusState private var titleFocused: Bool
 
-    init(item: Item, theme: PanelTheme, onDone: @escaping () -> Void) {
+    init(item: Item, theme: PanelTheme, scrolls: Bool = true, onDone: @escaping () -> Void) {
         self.item = item
         self.theme = theme
         self.onDone = onDone
+        self.scrolls = scrolls
         _title = State(initialValue: item.title)
         _category = State(initialValue: item.category)
         switch item.kind {
@@ -98,31 +101,37 @@ struct EditItemView: View {
                     .keyboardShortcut(.defaultAction)
             }
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    field("Name") {
-                        TextField("Name", text: $title)
-                            .textFieldStyle(.roundedBorder)
-                            .focused($titleFocused)
-                    }
-                    field("Category") { categoryPicker }
-                    field("Reminds you") {
-                        Picker("Reminds you", selection: $mode) {
-                            ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                    }
-                    scheduleFields
-                }
-                .padding(.bottom, 6)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if scrolls {
+                ScrollView { form }
+                    .scrollIndicators(.never)
+            } else {
+                form
             }
-            .scrollIndicators(.never)
         }
         .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onChange(of: title) { ReminderPanelController.shared.noteActivity() }
+    }
+
+    private var form: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            field("Name") {
+                TextField("Name", text: $title)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($titleFocused)
+            }
+            field("Category") { categoryPicker }
+            field("Reminds you") {
+                Picker("Reminds you", selection: $mode) {
+                    ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+            scheduleFields
+        }
+        .padding(.bottom, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Pieces
