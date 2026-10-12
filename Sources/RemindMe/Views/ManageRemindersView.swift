@@ -92,8 +92,11 @@ struct ManageRemindersView: View {
                 pendingDeletion = item
             } label: {
                 Image(systemName: "trash")
+                    .font(.system(size: 13))
+                    .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.plain)
             .foregroundStyle(.red)
             .help("Delete “\(item.title)”")
             .accessibilityLabel("Delete \(item.title)")
