@@ -1,0 +1,40 @@
+# Builds "Remind Me.dmg" on a GitHub-hosted Mac (which has full Xcode, so
+# the SwiftUI/SwiftData macro plugins are available) and attaches it to the
+# run as a downloadable artifact.
+#
+# Runs on every push to main, or by hand: Actions tab -> Build DMG -> Run workflow.
+name: Build DMG
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    # Apple Silicon runner — build.sh refuses to build on Intel.
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          uname -m
+
+      - name: Build and package
+        run: |
+          chmod +x build.sh
+          ./build.sh
+
+      - name: Upload .dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: Remind-Me-dmg
+          path: dist/Remind Me.dmg
+          if-no-files-found: error
+          retention-days: 30
