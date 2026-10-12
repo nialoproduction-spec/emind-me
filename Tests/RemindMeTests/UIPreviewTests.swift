@@ -28,8 +28,8 @@ final class UIPreviewTests: XCTestCase {
 
     private let theme = PanelTheme.default
 
-    private func card(popCount: Int, reaction: FaceMood? = nil) -> some View {
-        let item = Item(title: "Drink water", kind: .repeatingRoutine, intervalSeconds: 40 * 60)
+    private func card(popCount: Int, reaction: FaceMood? = nil, title: String = "Drink water") -> some View {
+        let item = Item(title: title, kind: .repeatingRoutine, intervalSeconds: 40 * 60)
         let occurrence = Occurrence(item: item, scheduledFireDate: .now)
         occurrence.remindersSentCount = popCount
         return ZStack {
@@ -37,7 +37,8 @@ final class UIPreviewTests: XCTestCase {
                 .fill(theme.background.opacity(theme.backgroundOpacity))
             LiveReminderView(occurrence: occurrence, theme: theme, initialReaction: reaction)
         }
-        .frame(width: 280, height: 230)
+        .frame(width: ReminderPanelController.liveReminderSize.width,
+               height: ReminderPanelController.liveReminderSize.height)
         .clipShape(RoundedRectangle(cornerRadius: theme.cornerRadius, style: .continuous))
         .padding(10)
         .background(Color(white: 0.5))
@@ -54,7 +55,7 @@ final class UIPreviewTests: XCTestCase {
         let reactions = HStack(spacing: 0) {
             card(popCount: 1, reaction: .done)
             card(popCount: 1, reaction: .snoozed)
-            card(popCount: 1, reaction: .skipped)
+            card(popCount: 1, reaction: .skipped, title: "Stretch your back and refill the water bottle")
         }
         try save(reactions, as: "preview-2-reactions-done-snooze-skip.png")
     }

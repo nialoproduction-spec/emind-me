@@ -32,9 +32,8 @@ struct LiveReminderView: View {
     }
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 10) {
             AnimatedFaceView(mood: mood, color: theme.text)
-                .frame(width: 168, height: 87)
 
             Text(occurrence.item?.title ?? "Reminder")
                 .font(theme.titleFont)
@@ -57,7 +56,7 @@ struct LiveReminderView: View {
             .disabled(reaction != nil)
         }
         .padding(14)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// Plays the reaction face, then performs the action. The panel's

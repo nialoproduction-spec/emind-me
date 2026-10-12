@@ -109,7 +109,7 @@ struct FaceView: View {
 
 /// How the reminder face behaves. The first three follow how many times it
 /// has had to pop; the last three are the short reaction to a button.
-enum FaceMood: Equatable {
+enum FaceMood: Hashable, CaseIterable {
     case gentle   // first pop: cute, blinking
     case nudge    // middle pops: pouty, wiggling
     case urgent   // last pop: angry, shaking
@@ -226,6 +226,43 @@ enum FaceScript {
     }
 }
 
+// MARK: - Layout
+
+/// Sizing for the face in the reminder card. Every face is drawn at the same
+/// scale; each mood's faces are centred as a group in a short window, so
+/// small faces don't leave a big gap under them, the eye line stays put
+/// within a mood, and the group glides to its new centre when a reaction
+/// starts.
+enum FaceLayout {
+    static let faceWidth: CGFloat = 168
+    static let windowHeight: CGFloat = 64
+    static var scale: CGFloat { faceWidth / FaceArt.canvas.width }
+    static var faceHeight: CGFloat { FaceArt.canvas.height * scale }
+
+    /// Vertical span, in canvas units, of everything a mood can show.
+    static func verticalSpan(of mood: FaceMood) -> ClosedRange<CGFloat> {
+        spans[mood] ?? 0...FaceArt.canvas.height
+    }
+
+    /// How far to shift the full-size face so the mood's span sits centred
+    /// in the window.
+    static func offset(for mood: FaceMood) -> CGFloat {
+        let span = verticalSpan(of: mood)
+        return windowHeight / 2 - (span.lowerBound + span.upperBound) / 2 * scale
+    }
+
+    private static let spans: [FaceMood: ClosedRange<CGFloat>] = Dictionary(
+        uniqueKeysWithValues: FaceMood.allCases.map { mood in
+            var box = CGRect.null
+            for beat in FaceScript.beats(for: mood) {
+                box = box.union(FaceShapes.strokes(beat.face).boundingBoxOfPath)
+                if let tears = FaceShapes.tears(beat.face) { box = box.union(tears.boundingBoxOfPath) }
+            }
+            return (mood, box.minY...box.maxY)
+        }
+    )
+}
+
 // MARK: - Animated face
 
 /// The face shown in the live reminder. Redraws at up to 30 fps, but only
@@ -251,6 +288,11 @@ struct AnimatedFaceView: View {
                 .rotationEffect(.degrees(frame.rotation))
                 .offset(x: frame.dx, y: frame.dy)
         }
+        .frame(width: FaceLayout.faceWidth, height: FaceLayout.faceHeight)
+        .offset(y: FaceLayout.offset(for: mood))
+        .animation(reduceMotion ? nil : .spring(duration: 0.35), value: mood)
+        .frame(width: FaceLayout.faceWidth, height: FaceLayout.windowHeight, alignment: .top)
+        .allowsHitTesting(false)
         .onChange(of: mood) { start = Date() }
     }
 }

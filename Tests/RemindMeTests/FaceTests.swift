@@ -87,6 +87,17 @@ final class FaceTests: XCTestCase {
         }
     }
 
+    func testEveryMoodFitsTheFaceWindow() {
+        for mood in FaceMood.allCases {
+            let span = FaceLayout.verticalSpan(of: mood)
+            let heightPt = (span.upperBound - span.lowerBound) * FaceLayout.scale
+            XCTAssertLessThanOrEqual(heightPt, FaceLayout.windowHeight + 3, "\(mood) is too tall for the card")
+            // Centred: the span's middle lands on the window's middle.
+            let middle = (span.lowerBound + span.upperBound) / 2 * FaceLayout.scale + FaceLayout.offset(for: mood)
+            XCTAssertEqual(middle, FaceLayout.windowHeight / 2, accuracy: 0.01)
+        }
+    }
+
     func testReduceMotionKeepsFacesStill() {
         for mood in [FaceMood.gentle, .nudge, .urgent, .done, .snoozed, .skipped] {
             for t in stride(from: 0.0, through: 3.0, by: 0.37) {
