@@ -16,8 +16,8 @@ enum AwayDetector {
         return CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInput)
     }
 
-    static func isAway(settings: SmartSettings = AppSettings.smart.value) -> Bool {
-        isAway(idleSeconds: idleSeconds(), settings: settings)
+    static func isAway() -> Bool {
+        isAway(idleSeconds: idleSeconds(), settings: AppSettings.smart.value)
     }
 
     nonisolated static func isAway(idleSeconds: TimeInterval, settings: SmartSettings) -> Bool {
