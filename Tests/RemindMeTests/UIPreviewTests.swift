@@ -130,7 +130,7 @@ final class UIPreviewTests: XCTestCase {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 10) {
                         Text("idle").font(.system(size: 10)).foregroundStyle(fg).frame(width: 64, alignment: .leading)
-                        icon(MenuBarFace.logoImage(), fg)
+                        self.icon(MenuBarFace.logoImage(), fg)
                         Text("Tue 13 Oct 1:37 AM").font(.system(size: 13)).foregroundStyle(fg)
                     }
                     ForEach(reactions.indices, id: \.self) { i in
@@ -140,7 +140,7 @@ final class UIPreviewTests: XCTestCase {
                             Text("hover: \(reaction.rawValue)").font(.system(size: 10)).foregroundStyle(fg)
                                 .frame(width: 64, alignment: .leading)
                             ForEach(times, id: \.self) { t in
-                                icon(MenuBarFace.faceImage(reaction.face(at: t), span: span, offset: reaction.motion(at: t)), fg)
+                                self.icon(MenuBarFace.faceImage(reaction.face(at: t), span: span, offset: reaction.motion(at: t)), fg)
                             }
                         }
                     }
@@ -151,7 +151,7 @@ final class UIPreviewTests: XCTestCase {
                             Text("due: \(String(describing: mood))").font(.system(size: 10)).foregroundStyle(fg)
                                 .frame(width: 64, alignment: .leading)
                             ForEach(Array(Set(faces)).sorted { $0.rawValue < $1.rawValue }.prefix(5), id: \.self) { face in
-                                icon(MenuBarFace.faceImage(face, span: span, offset: .zero), fg)
+                                self.icon(MenuBarFace.faceImage(face, span: span, offset: .zero), fg)
                             }
                         }
                     }
