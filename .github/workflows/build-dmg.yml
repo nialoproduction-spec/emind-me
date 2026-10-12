@@ -33,7 +33,7 @@ jobs:
       - name: Run tests
         run: |
           set -o pipefail
-          swift test 2>&1 | tee test.log
+          swift test --skip UIPreviewTests 2>&1 | tee test.log
 
       # Surface the results as annotations (readable via the API without
       # downloading the full log). Runs whether tests passed or failed.
@@ -50,6 +50,16 @@ jobs:
             echo "::error title=Test problems::${body}"
           fi
 
+      # Renders the real SwiftUI reminder card, all faces, the animation
+      # frames and the menu bar icon to PNGs, attached to the Release.
+      # Never blocks the build if rendering misbehaves on the CI machine.
+      - name: Render UI previews
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          PREVIEW_DIR="$PWD/previews" swift test --filter UIPreviewTests 2>&1 | tail -20
+          ls -la previews || true
+
       - name: Build and package
         run: |
           chmod +x build.sh
@@ -62,6 +72,7 @@ jobs:
           # GitHub turns spaces in asset names into dots, so give it a clean name.
           cp "dist/Remind Me.dmg" "Remind-Me.dmg"
           TAG="build-${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" "Remind-Me.dmg" \
+          shopt -s nullglob
+          gh release create "$TAG" "Remind-Me.dmg" previews/*.png \
             --title "Remind Me (build ${GITHUB_RUN_NUMBER})" \
             --notes "Built from commit ${GITHUB_SHA::7}. Open the .dmg and drag Remind Me into Applications. First launch: right-click > Open, or System Settings > Privacy & Security > Open Anyway."

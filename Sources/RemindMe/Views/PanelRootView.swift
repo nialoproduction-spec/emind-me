@@ -32,6 +32,7 @@ struct PanelRootView: View {
 
             if let occurrence = scheduler.activeOccurrence {
                 LiveReminderView(occurrence: occurrence, theme: themeStore.theme)
+                    .id(occurrence.id) // fresh face + reaction state for every reminder
                     .transition(.opacity)
             } else if scheduler.showEndOfDaySummary {
                 EndOfDaySummaryView(

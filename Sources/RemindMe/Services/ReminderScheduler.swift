@@ -183,6 +183,13 @@ final class ReminderScheduler: ObservableObject {
         }
     }
 
+    /// A button was tapped: stop the auto-collapse so the panel stays up for
+    /// the short reaction animation and the tap isn't lost if the 20-second
+    /// timer happens to run out mid-reaction.
+    func holdForReaction() {
+        autoCollapseTask?.cancel()
+    }
+
     /// Hides the live reminder but leaves its occurrence pending, so the
     /// escalation keeps going. What happens when nobody answers in time.
     func collapseWithoutResolving() {

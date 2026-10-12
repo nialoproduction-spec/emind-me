@@ -99,6 +99,17 @@ xcrun stapler staple "dist/Remind Me.dmg"
   `EscalationSettings`) — default 3 pops, 15 minutes apart. Today's
   occurrences, grouped under "Today — X of Y done," live at the top of the
   expanded panel.
+- **Faces** (`Faces/`) — the 24 kaomoji expressions from
+  `Design/expressions.jpg`, traced to vector outlines by
+  `scripts/trace_faces.py` (re-run it if the sheet changes). The live
+  reminder shows an animated face whose mood rises with each unanswered
+  pop: cute and blinking on the first, pouty in the middle, angry and
+  shaking on the last. Done / Snooze / Skip each play a short reaction
+  (happy hop, dozing off, crying) before the panel closes. Line art takes
+  the theme's text colour; tears stay brown. Honours Reduce Motion.
+- **Logo** — the —ω— face (`Design/logo.png`) is the app icon
+  (`Resources/AppIcon.icns`) and the menu bar icon (a template image, so it
+  follows light/dark menu bars).
 - **End of day** (`EndOfDaySettings`, `EndOfDaySummaryView`) — optional,
   off by default. At the chosen time: completion count, unfinished items,
   one-tap reschedule for today.
@@ -128,11 +139,10 @@ included. Worth knowing before you decide how to distribute Remind Me.
 
 ## Not done yet
 
-- App icon (`Resources/AppIcon.icns` — `build.sh` picks it up if present)
 - Launch-at-login toggle
 - Notification action buttons (snooze / complete from the system banner
   itself — the panel's own Done/Snooze/Skip work today)
-- Voice input, animated mascot, keep-awake, calendar sync, wake-from-sleep
+- Voice input, keep-awake, calendar sync, wake-from-sleep
   scheduling — explicitly out of scope for this version per your spec
 - iCloud sync (explicitly out of scope — local-only, no account — noting in
   case you change your mind later)

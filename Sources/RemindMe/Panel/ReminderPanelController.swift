@@ -16,7 +16,7 @@ final class ReminderPanelController {
 
     private static let collapsedSize = CGSize(width: 220, height: 56)
     private static let expandedSize = CGSize(width: 320, height: 420)
-    private static let liveReminderSize = CGSize(width: 280, height: 150)
+    private static let liveReminderSize = CGSize(width: 280, height: 230)
     private static let originDefaultsKey = "panel.origin.v1"
 
     /// Whether the panel was already visible/expanded before something
