@@ -3,6 +3,19 @@ import SwiftData
 import Combine
 import AppKit
 
+/// What the scheduler needs from the screen: show / hide the live reminder
+/// and the end-of-day overlay. `ReminderPanelController` is the real one;
+/// tests swap in a fake so the timing logic runs without any windows.
+@MainActor
+protocol LiveReminderPresenting: AnyObject {
+    func presentLiveReminder()
+    func dismissLiveReminder()
+    func presentOverlay()
+    func dismissOverlay()
+}
+
+extension ReminderPanelController: LiveReminderPresenting {}
+
 /// Drives everything time-based: noticing when a routine is due, popping the
 /// live reminder, the escalation (count and interval are user-adjustable in
 /// Settings — see `EscalationSettings`), snooze/done/skip, and the
@@ -29,26 +42,53 @@ final class ReminderScheduler: ObservableObject {
 
     private var modelContext: ModelContext?
     private var tickTimer: Timer?
+    private var wakeObserver: NSObjectProtocol?
     private var autoCollapseTask: Task<Void, Never>?
 
     private let tickInterval: TimeInterval = 20
-    private let snoozeInterval: TimeInterval = 5 * 60
-    private let suppressedRetryInterval: TimeInterval = 45
+    let snoozeInterval: TimeInterval = 5 * 60
+    let suppressedRetryInterval: TimeInterval = 45
     private let liveReminderVisibleDuration: TimeInterval = 20
 
-    /// Read fresh each time rather than cached, so a change in Settings
-    /// applies to the very next pop without needing a restart.
-    private var escalation: EscalationSettings { EscalationSettingsStore.shared.settings }
+    // Injected so tests can drive time, the screen, and settings directly.
+    private let presenter: LiveReminderPresenting
+    private let clock: @MainActor () -> Date
+    private let shouldSuppress: @MainActor () -> Bool
+    /// Read fresh on every use, so a change in Settings applies to the very
+    /// next pop without needing a restart.
+    private let escalationSettings: @MainActor () -> EscalationSettings
 
-    private init() {}
+    private var escalation: EscalationSettings { escalationSettings() }
+
+    init(
+        presenter: LiveReminderPresenting? = nil,
+        now: (@MainActor () -> Date)? = nil,
+        shouldSuppress: (@MainActor () -> Bool)? = nil,
+        escalationSettings: (@MainActor () -> EscalationSettings)? = nil
+    ) {
+        self.presenter = presenter ?? ReminderPanelController.shared
+        self.clock = now ?? { Date.now }
+        self.shouldSuppress = shouldSuppress ?? { FocusGuard.shouldSuppress() }
+        self.escalationSettings = escalationSettings ?? { EscalationSettingsStore.shared.settings }
+    }
 
     func start(modelContext: ModelContext) {
-        self.modelContext = modelContext
+        attach(modelContext: modelContext)
         scheduleTimer()
-        NSWorkspace.shared.notificationCenter.addObserver(
-            self, selector: #selector(handleWake), name: NSWorkspace.didWakeNotification, object: nil
-        )
+        // Block-based observer: no Objective-C selector, nothing to unregister
+        // by hand while the scheduler lives for the whole app session.
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.tick() }
+        }
         tick() // catch up on anything due since the app last ran
+    }
+
+    /// Hooks up storage without starting the timer — `start` uses this, and
+    /// tests call it directly, then drive `tick()` themselves.
+    func attach(modelContext: ModelContext) {
+        self.modelContext = modelContext
     }
 
     private func scheduleTimer() {
@@ -61,15 +101,11 @@ final class ReminderScheduler: ObservableObject {
         tickTimer = timer
     }
 
-    @objc private func handleWake() {
-        tick()
-    }
-
     // MARK: - Tick
 
-    private func tick() {
+    func tick() {
         guard let modelContext else { return }
-        let now = Date.now
+        let now = clock()
 
         let items = (try? modelContext.fetch(FetchDescriptor<Item>())) ?? []
         let allOccurrences = (try? modelContext.fetch(FetchDescriptor<Occurrence>())) ?? []
@@ -111,9 +147,10 @@ final class ReminderScheduler: ObservableObject {
         // the next computed time is itself already in the past, jump
         // forward from *now* instead — a long sleep should cost one missed
         // catch-up, not a backlog of simultaneous pops.
+        let current = clock()
         var next = item.computeNextFireDate(after: dueAt)
-        if let candidate = next, candidate <= .now {
-            next = item.computeNextFireDate(after: .now)
+        if let candidate = next, candidate <= current {
+            next = item.computeNextFireDate(after: current)
         }
         item.nextFireDate = next
 
@@ -121,29 +158,37 @@ final class ReminderScheduler: ObservableObject {
     }
 
     private func attemptPresent(_ occurrence: Occurrence) {
-        guard activeOccurrence == nil, !FocusGuard.shouldSuppress() else {
-            // Not shown — retry soon without spending one of the 3 attempts.
-            occurrence.nextEscalationAt = Date.now.addingTimeInterval(suppressedRetryInterval)
+        let current = clock()
+        guard activeOccurrence == nil, !shouldSuppress() else {
+            // Not shown — retry soon without spending one of the attempts.
+            occurrence.nextEscalationAt = current.addingTimeInterval(suppressedRetryInterval)
             return
         }
         occurrence.remindersSentCount += 1
-        if occurrence.firstFiredAt == nil { occurrence.firstFiredAt = .now }
-        occurrence.nextEscalationAt = Date.now.addingTimeInterval(TimeInterval(escalation.intervalMinutes * 60))
+        if occurrence.firstFiredAt == nil { occurrence.firstFiredAt = current }
+        occurrence.nextEscalationAt = current.addingTimeInterval(TimeInterval(escalation.intervalMinutes * 60))
         present(occurrence)
     }
 
     private func present(_ occurrence: Occurrence) {
         activeOccurrence = occurrence
-        ReminderPanelController.shared.presentLiveReminder()
+        presenter.presentLiveReminder()
 
         autoCollapseTask?.cancel()
         let visibleFor = liveReminderVisibleDuration
         autoCollapseTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(visibleFor))
             guard let self, !Task.isCancelled, self.activeOccurrence?.id == occurrence.id else { return }
-            self.activeOccurrence = nil
-            ReminderPanelController.shared.dismissLiveReminder()
+            self.collapseWithoutResolving()
         }
+    }
+
+    /// Hides the live reminder but leaves its occurrence pending, so the
+    /// escalation keeps going. What happens when nobody answers in time.
+    func collapseWithoutResolving() {
+        autoCollapseTask?.cancel()
+        activeOccurrence = nil
+        presenter.dismissLiveReminder()
     }
 
     private func finalizeUnfinished(_ occurrence: Occurrence) {
@@ -158,43 +203,59 @@ final class ReminderScheduler: ObservableObject {
 
     func snooze() {
         guard let occurrence = activeOccurrence else { return }
-        occurrence.nextEscalationAt = Date.now.addingTimeInterval(snoozeInterval)
+        // A snooze must always come back. If this was the last allowed pop,
+        // step the count back by one so the snoozed re-pop still happens —
+        // otherwise the next check would see "out of attempts" and mark it
+        // unfinished without ever showing it again.
+        let maxPops = escalation.maxReminders
+        if occurrence.remindersSentCount >= maxPops {
+            occurrence.remindersSentCount = maxPops - 1
+        }
+        occurrence.nextEscalationAt = clock().addingTimeInterval(snoozeInterval)
         try? modelContext?.save()
-        dismissActive()
+        collapseWithoutResolving()
     }
 
     private func resolve(status: OccurrenceStatus) {
         guard let occurrence = activeOccurrence else { return }
         occurrence.status = status
-        occurrence.resolvedAt = .now
+        occurrence.resolvedAt = clock()
         occurrence.nextEscalationAt = nil
         try? modelContext?.save()
-        dismissActive()
-    }
-
-    private func dismissActive() {
-        autoCollapseTask?.cancel()
-        activeOccurrence = nil
-        ReminderPanelController.shared.dismissLiveReminder()
+        collapseWithoutResolving()
     }
 
     // MARK: - End of day
 
-    private func checkEndOfDay(now: Date) {
-        let settings = EndOfDaySettingsStore.shared.settings
-        guard settings.isEnabled, !showEndOfDaySummary else { return }
-        let comps = Calendar.current.dateComponents([.hour, .minute], from: now)
-        guard comps.hour == settings.hour, comps.minute == settings.minute else { return }
-        let todayKey = Occurrence.dayKey(for: now)
-        guard settings.lastShownDayKey != todayKey else { return }
+    /// True once the day's chosen summary time has passed and it hasn't been
+    /// shown yet today. "At or after", not "exactly at": if the Mac is asleep
+    /// or the app is busy at 9:00 PM, the summary still appears the next time
+    /// the scheduler checks, instead of being skipped for the whole day.
+    nonisolated static func shouldShowEndOfDay(
+        settings: EndOfDaySettings, now: Date, calendar: Calendar = .current
+    ) -> Bool {
+        guard settings.isEnabled else { return false }
+        guard settings.lastShownDayKey != Occurrence.dayKey(for: now, calendar: calendar) else { return false }
+        var comps = calendar.dateComponents([.year, .month, .day], from: now)
+        comps.hour = settings.hour
+        comps.minute = settings.minute
+        comps.second = 0
+        guard let summaryTime = calendar.date(from: comps) else { return false }
+        return now >= summaryTime
+    }
 
-        EndOfDaySettingsStore.shared.settings.lastShownDayKey = todayKey
+    private func checkEndOfDay(now: Date) {
+        guard !showEndOfDaySummary else { return }
+        let settings = EndOfDaySettingsStore.shared.settings
+        guard Self.shouldShowEndOfDay(settings: settings, now: now) else { return }
+
+        EndOfDaySettingsStore.shared.settings.lastShownDayKey = Occurrence.dayKey(for: now)
         showEndOfDaySummary = true
-        ReminderPanelController.shared.presentOverlay()
+        presenter.presentOverlay()
     }
 
     func dismissEndOfDaySummary() {
         showEndOfDaySummary = false
-        ReminderPanelController.shared.dismissOverlay()
+        presenter.dismissOverlay()
     }
 }

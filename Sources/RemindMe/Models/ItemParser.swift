@@ -91,16 +91,24 @@ enum ItemParser {
                     ? ns.substring(with: ampmRange).lowercased() : nil
                 if ampm?.contains("o'clock") == true { ampm = nil }
 
-                if parsedHour >= 0 && parsedHour <= 12 {
-                    if let ampm, ampm.hasPrefix("p") {
-                        if parsedHour != 12 { parsedHour += 12 }
-                    } else if let ampm, ampm.hasPrefix("a") {
-                        if parsedHour == 12 { parsedHour = 0 }
+                let isPM = ampm?.hasPrefix("p") == true
+                let isAM = ampm?.hasPrefix("a") == true
+                var isValidTime = false
+                if isPM || isAM {
+                    // 12-hour clock: only 1–12 make sense with am/pm.
+                    if (1...12).contains(parsedHour) {
+                        if isPM, parsedHour != 12 { parsedHour += 12 }
+                        if isAM, parsedHour == 12 { parsedHour = 0 }
+                        isValidTime = true
                     }
-                    // No am/pm at all: leave as-is. A bare "at 9" reads as
-                    // 9am, a bare "at 12" reads as noon — both defaults the
-                    // confirmation step will show plainly before saving.
-                    hour = parsedHour % 24
+                } else if (0...23).contains(parsedHour) {
+                    // No am/pm: 13–23 read as a 24-hour clock ("at 16:30").
+                    // A bare "at 9" reads as 9am and "at 12" as noon — both
+                    // defaults the confirmation step shows before saving.
+                    isValidTime = true
+                }
+                if isValidTime, (0...59).contains(parsedMinute) {
+                    hour = parsedHour
                     minute = parsedMinute
                     stripRanges.append(match.range)
                 }

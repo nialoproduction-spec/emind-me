@@ -169,6 +169,14 @@ final class Item {
     }
 
     static func durationString(_ seconds: Double) -> String {
+        if seconds >= 604800, seconds.truncatingRemainder(dividingBy: 604800) == 0 {
+            let weeks = Int(seconds / 604800)
+            return weeks == 1 ? "1 week" : "\(weeks) weeks"
+        }
+        if seconds >= 86400, seconds.truncatingRemainder(dividingBy: 86400) == 0 {
+            let days = Int(seconds / 86400)
+            return days == 1 ? "1 day" : "\(days) days"
+        }
         if seconds >= 3600, seconds.truncatingRemainder(dividingBy: 3600) == 0 {
             let hours = Int(seconds / 3600)
             return hours == 1 ? "1 hour" : "\(hours) hours"

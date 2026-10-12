@@ -30,6 +30,26 @@ jobs:
           swift --version
           uname -m
 
+      - name: Run tests
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee test.log
+
+      # Surface the results as annotations (readable via the API without
+      # downloading the full log). Runs whether tests passed or failed.
+      - name: Report test results
+        if: always()
+        run: |
+          [ -f test.log ] || exit 0
+          summary=$(grep -E "Executed [0-9]+ tests?" test.log | tail -1)
+          echo "::notice title=Test summary::${summary:-no summary line found}"
+          grep -E "error:|: error|failed \(|warning: .*Sources/RemindMe" test.log \
+            | grep -v "^\s*$" | awk '!seen[$0]++' | head -60 > problems.txt || true
+          if [ -s problems.txt ]; then
+            body=$(sed 's/%/%25/g' problems.txt | awk '{printf "%s%%0A", $0}')
+            echo "::error title=Test problems::${body}"
+          fi
+
       - name: Build and package
         run: |
           chmod +x build.sh

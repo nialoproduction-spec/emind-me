@@ -10,7 +10,7 @@ enum OccurrenceStatus: Int, Codable {
     case pending = 0
     case done = 1
     case skipped = 2
-    /// Escalation ran out (3 unanswered pops) — moved to the day's
+    /// Escalation ran out (N unanswered pops, N set in Settings) — moved to the day's
     /// unfinished list instead of continuing to nag.
     case unfinished = 3
 }
@@ -24,7 +24,7 @@ final class Occurrence {
     var dayKey: String
     var scheduledFireDate: Date
     var statusRaw: Int
-    /// How many times the panel has popped for this occurrence (max 3).
+    /// How many times the panel has popped for this occurrence (max set in Settings).
     var remindersSentCount: Int
     var firstFiredAt: Date?
     /// Absolute time of the next nag. Nil once resolved (done/skipped) or
