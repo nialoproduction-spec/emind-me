@@ -260,9 +260,8 @@ struct ExpandedPanelView: View {
 
     private func delete(_ list: [Item], at offsets: IndexSet) {
         for index in offsets {
-            let item = list[index]
-            NotificationService.shared.cancel(for: item)
-            modelContext.delete(item)
+            // Removes the item's occurrences too (see ItemDeletion).
+            ItemDeletion.delete(list[index], in: modelContext)
         }
     }
 }

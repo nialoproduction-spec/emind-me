@@ -91,6 +91,13 @@ xcrun stapler staple "dist/Remind Me.dmg"
   (default), top left, bottom right, bottom left, a custom spot (drag the
   panel anywhere to save it), or under the menu bar icon like a drop-down.
   Resizing keeps the chosen corner anchored.
+- **Managing reminders** (Settings → Your reminders) — every routine and
+  goal (active first, then paused / achieved), each with a delete button
+  and a confirmation before removal. Deleting goes through `ItemDeletion`,
+  which removes the item's occurrences too and closes its reminder if it's
+  on screen. Older builds deleted only the item, leaving occurrences linked
+  to nothing — SwiftData then stopped the app at launch. `StoreRepair`
+  clears those leftovers from the database file before SwiftData opens it.
 - **Menu bar icon** (`MenuBarFace`) — the —ω— logo. Hover it and it wakes up
   with a random little reaction (happy, shocked, scared, silly, shy, dizzy,
   smug, huffy), then goes back to the logo. While a reminder is waiting it

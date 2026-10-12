@@ -50,27 +50,64 @@ struct ThemeSettingsView: View {
         _placement = State(initialValue: PlacementStore.shared.settings.placement)
     }
 
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Settings")
-                    .font(.title3.bold())
+    private enum Tab: String, CaseIterable, Identifiable {
+        case general = "General"
+        case reminders = "Your reminders"
+        var id: String { rawValue }
+    }
 
-                appearanceSection
-                Divider()
-                endOfDaySection
-                Divider()
-                remindersSection
-                Divider()
-                positionSection
-                Divider()
-                footerNote
-                actionButtons
+    @State private var tab: Tab = .general
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Settings")
+                .font(.title3.bold())
+
+            Picker("Section", selection: $tab) {
+                ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
             }
-            .padding(20)
-            .frame(width: 320)
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    switch tab {
+                    case .general:
+                        generalContent
+                    case .reminders:
+                        ManageRemindersView()
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 440)
+
+            if tab == .general {
+                actionButtons
+            } else {
+                // Deletions take effect as soon as they're confirmed.
+                HStack {
+                    Spacer()
+                    Button("Done") { isPresented = false }
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
         }
-        .frame(maxHeight: 560)
+        .padding(20)
+        .frame(width: 340)
+    }
+
+    @ViewBuilder
+    private var generalContent: some View {
+        appearanceSection
+        Divider()
+        endOfDaySection
+        Divider()
+        remindersSection
+        Divider()
+        positionSection
+        Divider()
+        footerNote
     }
 
     // MARK: - Sections (split out so the type-checker doesn't choke on one

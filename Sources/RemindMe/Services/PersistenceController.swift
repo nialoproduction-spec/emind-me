@@ -11,6 +11,9 @@ enum PersistenceController {
             isStoredInMemoryOnly: false,
             cloudKitDatabase: .none
         )
+        // Clear out occurrences left pointing at deleted routines by older
+        // builds — before SwiftData opens the store and trips over them.
+        StoreRepair.removeOrphanedOccurrences(storeURL: configuration.url)
         do {
             return try ModelContainer(for: schema, configurations: [configuration])
         } catch {

@@ -1,6 +1,7 @@
 import XCTest
 import SwiftUI
 import AppKit
+import SwiftData
 @testable import RemindMe
 
 /// Renders the real SwiftUI views to PNG files so they can be looked at
@@ -193,5 +194,29 @@ final class UIPreviewTests: XCTestCase {
         .padding(10)
         .background(Color.black)
         try save(sheet, as: "preview-6-placements.png")
+    }
+
+    func testRenderManageReminders() throws {
+        try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
+        let container = try ModelContainer(
+            for: Item.self, Occurrence.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let context = container.mainContext
+        for text in ["drink water every 40 minutes", "walk at 4am every day", "read a book at 7am",
+                     "go to Godavari", "pay rent by friday", "stretch every hour"] {
+            context.insert(Item(from: ItemParser.parse(text)))
+        }
+        let paused = Item(from: ItemParser.parse("meditate at 6am"))
+        paused.isActive = false
+        context.insert(paused)
+        try context.save()
+
+        let view = ManageRemindersView()
+            .modelContainer(container)
+            .padding(20)
+            .frame(width: 340)
+            .background(Color(nsColor: .windowBackgroundColor))
+        try save(view, as: "preview-7-your-reminders.png")
     }
 }

@@ -235,6 +235,16 @@ final class ReminderScheduler: ObservableObject {
         }
     }
 
+    /// The routine behind the reminder on screen is being deleted: close the
+    /// reminder. Returns true if it was the one showing.
+    @discardableResult
+    func closeLiveReminder(belongingTo item: Item) -> Bool {
+        guard let active = activeOccurrence,
+              active.item?.persistentModelID == item.persistentModelID else { return false }
+        closeLiveReminder()
+        return true
+    }
+
     /// Clears the answered reminder off the screen.
     private func closeLiveReminder() {
         activeOccurrence = nil
