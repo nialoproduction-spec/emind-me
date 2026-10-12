@@ -83,23 +83,27 @@ final class GlobalHotkeys {
     private func installHandler() {
         guard handlerRef == nil else { return }
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, event, _ -> OSStatus in
-            var hotKeyID = EventHotKeyID()
-            let status = GetEventParameter(
-                event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
-                nil, MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID
-            )
-            guard status == noErr else { return status }
-            let id = hotKeyID.id
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated { GlobalHotkeys.handle(id: id) }
-            }
-            return noErr
-        }, 1, &spec, nil, &handlerRef)
+        InstallEventHandler(GetApplicationEventTarget(), hotKeyEventHandler, 1, &spec, nil, &handlerRef)
     }
 
-    private static func handle(id: UInt32) {
+    fileprivate static func handle(id: UInt32) {
         guard let binding = bindings.first(where: { $0.id == id }) else { return }
         ReminderScheduler.shared.requestShortcut(binding.action)
     }
+}
+
+/// Called by the system when one of the hot keys is pressed. A plain C
+/// callback (no captured state), so it lives outside the class.
+private let hotKeyEventHandler: EventHandlerUPP = { _, event, _ -> OSStatus in
+    var hotKeyID = EventHotKeyID()
+    let status = GetEventParameter(
+        event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
+        nil, MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID
+    )
+    guard status == noErr else { return status }
+    let id = hotKeyID.id
+    DispatchQueue.main.async {
+        MainActor.assumeIsolated { GlobalHotkeys.handle(id: id) }
+    }
+    return noErr
 }

@@ -298,7 +298,7 @@ final class UIPreviewTests: XCTestCase {
                 ReminderRowView(item: find("Walk"), theme: theme, streak: 4, onToggle: {})
                 ReminderRowView(item: find("Meditate"), theme: theme, onToggle: {})
                 Text("TODAY").font(.system(size: 10, weight: .semibold)).foregroundStyle(.gray)
-                ForEach(today.prefix(4)) { ChecklistRowView(occurrence: $0, theme: theme) }
+                ForEach(today.prefix(4)) { ChecklistRowView(occurrence: $0, theme: self.theme) }
                 SuggestionBar(
                     suggestion: Insights.Suggestion(
                         id: "x", itemID: find("Walk").persistentModelID,
