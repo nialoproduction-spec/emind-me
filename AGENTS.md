@@ -43,6 +43,8 @@ Sources/RemindMe/
     Insights.swift               history, streaks, weekly summary, smart suggestions (pure functions)
     AwayDetector.swift           idle time → "away" (no permissions needed)
     GlobalHotkeys.swift          ⌃⌥D / ⌃⌥S / ⌃⌥K via Carbon RegisterEventHotKey, only while a reminder shows
+    NoticePill.swift             small dark popup (face + title + live countdown), no buttons; used by
+                                 the break timer, quiet reminders and the 8 PM goal check-in
     BreakCycle.swift             break timer ("rest every 40 min and take a 10 min break"): pure
                                  BreakCycleState + BreakCycleManager; state in UserDefaults (not
                                  SwiftData), countdown in the menu bar, pauses while the Mac sleeps
@@ -107,3 +109,9 @@ Design/, scripts/trace_faces.py  source art + the tracer that generated Faces/Fa
   with no jargon.
 - Keep pure logic (parsing, scheduling maths, insights) in testable functions
   separate from views. Add tests next to any change in behaviour.
+
+## Types (v2)
+- Reminder = `Item.style == .justRemind`: popup only, no Occurrence, no Done/Snooze/Skip, no notification.
+- Habit = `.habit` (nil `styleRaw` counts as habit): the full card and notification.
+- Goal = `kind == .goal`: no schedule; one 8 PM popup per day while any is open (`GoalNudgeSettings`).
+- All sounds are off. Don't add any.

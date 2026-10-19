@@ -10,6 +10,47 @@ enum ItemKind: Int, Codable, CaseIterable {
     case goal = 2
 }
 
+/// How a routine behaves when it comes due.
+enum ReminderStyle: Int, Codable, CaseIterable {
+    /// Tracked: the card stays until Done / Snooze / Skip, nags, counts in the
+    /// checklist and streaks. This is how every routine behaved before styles
+    /// existed, so a missing value means `.habit`.
+    case habit = 0
+    /// Just a heads-up: a small popup with a face and the title that goes
+    /// away by itself. No buttons, no nagging, no checklist entry.
+    case justRemind = 1
+}
+
+/// What the person picks in the confirmation bar.
+enum ItemType: String, CaseIterable {
+    case reminder, habit, goal
+
+    var label: String {
+        switch self {
+        case .reminder: return "Reminder"
+        case .habit: return "Habit"
+        case .goal: return "Goal"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .reminder: return "bell"
+        case .habit: return "checkmark.circle"
+        case .goal: return "flag"
+        }
+    }
+
+    /// One plain line on what it does.
+    var explanation: String {
+        switch self {
+        case .reminder: return "Just reminds you. No buttons to press."
+        case .habit: return "Stays until you tap Done, Snooze or Skip."
+        case .goal: return "Checked at 8 PM each day until it's done."
+        }
+    }
+}
+
 @Model
 final class Item {
     var id: UUID
@@ -50,10 +91,17 @@ final class Item {
     /// When its schedule was last edited. Smart suggestions only learn from
     /// reminders after this, so an applied suggestion isn't suggested again.
     var scheduleEditedAt: Date?
+    /// Routines only. Nil on anything saved before styles existed (= habit).
+    var styleRaw: Int?
 
     var kind: ItemKind {
         get { ItemKind(rawValue: kindRaw) ?? .goal }
         set { kindRaw = newValue.rawValue }
+    }
+
+    var style: ReminderStyle {
+        get { styleRaw.flatMap(ReminderStyle.init(rawValue:)) ?? .habit }
+        set { styleRaw = newValue.rawValue }
     }
 
     init(
@@ -69,7 +117,8 @@ final class Item {
         weekdaysRaw: [Int]? = nil,
         targetDate: Date? = nil,
         nextFireDate: Date? = nil,
-        category: String? = nil
+        category: String? = nil,
+        style: ReminderStyle? = nil
     ) {
         self.id = id
         self.title = title
@@ -86,18 +135,21 @@ final class Item {
         self.pausedUntil = nil
         self.category = category
         self.scheduleEditedAt = nil
+        self.styleRaw = style?.rawValue
     }
 
     convenience init(from parsed: ParsedItem) {
+        let isGoal = parsed.type == .goal
         self.init(
             title: parsed.title,
-            kind: parsed.kind,
-            intervalSeconds: parsed.intervalSeconds,
-            hour: parsed.hour,
-            minute: parsed.minute,
-            weekdaysRaw: parsed.weekdays.isEmpty ? nil : Array(parsed.weekdays).sorted(),
-            targetDate: parsed.targetDate,
-            category: parsed.category
+            kind: isGoal ? .goal : parsed.kind,
+            intervalSeconds: isGoal ? nil : parsed.intervalSeconds,
+            hour: isGoal ? nil : parsed.hour,
+            minute: isGoal ? nil : parsed.minute,
+            weekdaysRaw: isGoal || parsed.weekdays.isEmpty ? nil : Array(parsed.weekdays).sorted(),
+            targetDate: isGoal ? parsed.targetDate : nil,
+            category: parsed.category,
+            style: isGoal ? nil : (parsed.type == .habit ? .habit : .justRemind)
         )
         self.nextFireDate = computeNextFireDate()
     }

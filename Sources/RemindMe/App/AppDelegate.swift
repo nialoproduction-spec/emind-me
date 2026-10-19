@@ -49,6 +49,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ReminderPanelController.shared.statusItemFrame = { [weak self] in
             self?.statusItem.button?.window?.frame
         }
+        // The popups line up under the icon too.
+        NoticePillController.shared.statusItemFrame = { [weak self] in
+            self?.statusItem.button?.window?.frame
+        }
     }
 
     private func showBreakTitle(_ title: String) {

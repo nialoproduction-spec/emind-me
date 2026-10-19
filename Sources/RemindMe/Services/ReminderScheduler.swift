@@ -89,6 +89,10 @@ final class ReminderScheduler: ObservableObject {
     private let resumed: @MainActor (Item) -> Void
     /// When (and whether) the weekly summary shows.
     private let weeklySettings: PersistedSettings<WeeklySummarySettings>
+    /// When the daily goal check-in shows.
+    private let goalNudgeSettings: PersistedSettings<GoalNudgeSettings>
+    /// Shows a small popup (quiet reminders, the goal check-in).
+    private let showNotice: @MainActor (NoticeContent) -> Void
 
     private var escalation: EscalationSettings { escalationSettings() }
 
@@ -100,7 +104,9 @@ final class ReminderScheduler: ObservableObject {
         isAway: (@MainActor () -> Bool)? = nil,
         defaultSnoozeMinutes: (@MainActor () -> Int)? = nil,
         resumed: (@MainActor (Item) -> Void)? = nil,
-        weeklySettings: PersistedSettings<WeeklySummarySettings>? = nil
+        weeklySettings: PersistedSettings<WeeklySummarySettings>? = nil,
+        goalNudgeSettings: PersistedSettings<GoalNudgeSettings>? = nil,
+        showNotice: (@MainActor (NoticeContent) -> Void)? = nil
     ) {
         self.presenter = presenter ?? ReminderPanelController.shared
         self.clock = now ?? { Date.now }
@@ -110,6 +116,8 @@ final class ReminderScheduler: ObservableObject {
         self.defaultSnoozeMinutes = defaultSnoozeMinutes ?? { AppSettings.snooze.value.defaultMinutes }
         self.resumed = resumed ?? { NotificationService.shared.schedule(for: $0) }
         self.weeklySettings = weeklySettings ?? AppSettings.weekly
+        self.goalNudgeSettings = goalNudgeSettings ?? AppSettings.goalNudge
+        self.showNotice = showNotice ?? { NoticePillController.shared.show($0) }
     }
 
     func start(modelContext: ModelContext) {
@@ -193,10 +201,15 @@ final class ReminderScheduler: ObservableObject {
                     attemptPresent(occurrence, held: away)
                 }
             } else if let nextFire = item.nextFireDate, nextFire <= now {
-                fireNew(item: item, dueAt: nextFire, held: away)
+                if item.style == .justRemind {
+                    fireQuietReminder(item: item, dueAt: nextFire, held: suppressed || away)
+                } else {
+                    fireNew(item: item, dueAt: nextFire, held: away)
+                }
             }
         }
 
+        checkGoalNudge(now: now, items: items, held: suppressed || away)
         checkEndOfDay(now: now)
         checkWeeklySummary(now: now)
         try? modelContext.save()
@@ -219,6 +232,57 @@ final class ReminderScheduler: ObservableObject {
         item.nextFireDate = next
 
         attemptPresent(occurrence, held: held)
+    }
+
+    /// A "just remind" routine came due: a small popup with a face and the
+    /// title, nothing to answer. No occurrence is stored, so it never nags,
+    /// never blocks its next firing, and never lands in the checklist.
+    /// `held` (away, or a Focus / full-screen app): there's nobody to tell, so
+    /// this one is simply skipped rather than queued up.
+    private func fireQuietReminder(item: Item, dueAt: Date, held: Bool) {
+        let current = clock()
+        var next = item.computeNextFireDate(after: dueAt)
+        if let candidate = next, candidate <= current {
+            next = item.computeNextFireDate(after: current)
+        }
+        item.nextFireDate = next
+        guard !held else { return }
+        showNotice(NoticeContent(title: item.title, face: Self.quietFaces.randomElement(), duration: 6))
+    }
+
+    private static let quietFaces: [Face] = [.happy, .sheepish, .smug, .grin, .squee]
+
+    // MARK: - Goal check-in
+
+    /// True once the check-in time has passed and it hasn't shown yet today.
+    nonisolated static func shouldShowGoalNudge(
+        settings: GoalNudgeSettings, now: Date, calendar: Calendar = .current
+    ) -> Bool {
+        guard settings.isEnabled else { return false }
+        guard settings.lastShownDayKey != Occurrence.dayKey(for: now, calendar: calendar) else { return false }
+        var comps = calendar.dateComponents([.year, .month, .day], from: now)
+        comps.hour = settings.hour
+        comps.minute = settings.minute
+        comps.second = 0
+        guard let time = calendar.date(from: comps) else { return false }
+        return now >= time
+    }
+
+    /// Once a day at the check-in time (8 PM by default), a popup lists the
+    /// goals still open. Nothing open: nothing shown. If nobody's looking
+    /// (away / full screen) it waits and shows later, still today.
+    private func checkGoalNudge(now: Date, items: [Item], held: Bool) {
+        let open = items.filter { $0.kind == .goal && !$0.isAchieved }
+        guard !open.isEmpty, !held,
+              Self.shouldShowGoalNudge(settings: goalNudgeSettings.value, now: now) else { return }
+        goalNudgeSettings.value.lastShownDayKey = Occurrence.dayKey(for: now)
+        let content: NoticeContent
+        if open.count == 1, let goal = open.first {
+            content = NoticeContent(title: goal.title, detail: "Goal · not done yet", face: .sheepish, duration: 10)
+        } else {
+            content = NoticeContent(title: "\(open.count) goals still open", detail: "Goal check-in", face: .sheepish, duration: 10)
+        }
+        showNotice(content)
     }
 
     /// `held`: the person is away from the Mac — wait for them, without

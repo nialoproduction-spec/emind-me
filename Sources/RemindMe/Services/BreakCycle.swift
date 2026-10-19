@@ -14,6 +14,13 @@ struct BreakCycleConfig: Codable, Equatable {
 struct BreakCycleState: Codable, Equatable {
     enum Phase: String, Codable { case work, onBreak }
     enum Event: Equatable { case breakStarted, breakEnded }
+    /// Heads-ups partway through a phase, each shown once per phase.
+    enum Milestone: Hashable { case lastTen, lastSeconds }
+
+    /// "Last 10 minutes" pops up when a work stretch is down to this.
+    static let lastTenThreshold: TimeInterval = 10 * 60
+    /// The final stretch: the countdown popup stays on screen from here.
+    static let lastSecondsThreshold: TimeInterval = 10
 
     var config: BreakCycleConfig
     var phase: Phase
@@ -26,6 +33,8 @@ struct BreakCycleState: Codable, Equatable {
             phaseEnd: now.addingTimeInterval(TimeInterval(config.workMinutes * 60))
         )
     }
+
+    var phaseMinutes: Int { phase == .work ? config.workMinutes : config.breakMinutes }
 
     /// Moves to the next phase if the current one is over. Returns what
     /// happened, or nil if nothing changed. At most one step per call, and the
@@ -56,6 +65,23 @@ struct BreakCycleState: Codable, Equatable {
         max(0, phaseEnd.timeIntervalSince(now))
     }
 
+    /// The most urgent heads-up that's due and hasn't been shown this phase.
+    /// "Last 10 minutes" only exists for work stretches long enough for it to
+    /// mean something (so a 5-minute test cycle doesn't open with it).
+    func dueMilestone(at now: Date, shown: Set<Milestone>) -> Milestone? {
+        let left = remaining(at: now)
+        if left > 0, left <= Self.lastSecondsThreshold, !shown.contains(.lastSeconds) {
+            return .lastSeconds
+        }
+        if phase == .work,
+           TimeInterval(phaseMinutes * 60) > Self.lastTenThreshold + 60,
+           left > Self.lastSecondsThreshold, left <= Self.lastTenThreshold,
+           !shown.contains(.lastTen) {
+            return .lastTen
+        }
+        return nil
+    }
+
     /// "9:42" — rounds up, so it reads 0:01 until the moment it ends.
     static func clockString(_ seconds: TimeInterval) -> String {
         let total = Int(max(0, seconds).rounded(.up))
@@ -69,7 +95,12 @@ struct BreakCycleState: Codable, Equatable {
     }
 }
 
-/// Runs the break cycle and shows its countdown in the menu bar.
+/// Runs the break cycle: a countdown in the menu bar plus a popup at the
+/// moments that matter. Silent: no beeps, no notification sounds.
+///
+/// Popups: when a work stretch starts ("40 minutes to go", counting), with
+/// 10 minutes left, for the last 10 seconds (stays up, counting), when the
+/// break starts ("Time for a break · Rest for 10 minutes."), and when it ends.
 ///
 /// Kept out of SwiftData on purpose: it's one small piece of live state, not
 /// a routine with a history, so it lives in UserDefaults (no model change,
@@ -88,33 +119,28 @@ final class BreakCycleManager: ObservableObject {
     private let defaults: UserDefaults
     private let key = "breakCycle.v1"
     private let clock: @MainActor () -> Date
-    private let beep: @MainActor (Int) -> Void
-    private let notify: @MainActor (String, String) -> Void
+    /// Show a popup; nil puts the current one away.
+    private let notice: @MainActor (NoticeContent?) -> Void
 
     private var timer: Timer?
     private var timerEnabled = false
     private var sleepStart: Date?
     private var observers: [NSObjectProtocol] = []
+    private var shown: Set<BreakCycleState.Milestone> = []
 
     init(
         defaults: UserDefaults = .standard,
         now: (@MainActor () -> Date)? = nil,
-        beep: (@MainActor (Int) -> Void)? = nil,
-        notify: (@MainActor (String, String) -> Void)? = nil
+        notice: (@MainActor (NoticeContent?) -> Void)? = nil
     ) {
         self.defaults = defaults
         self.clock = now ?? { Date.now }
-        self.beep = beep ?? { count in
-            // The system alert sound, a few times so it isn't missed.
-            Task { @MainActor in
-                for _ in 0..<count {
-                    NSSound.beep()
-                    try? await Task.sleep(for: .milliseconds(400))
-                }
+        self.notice = notice ?? { content in
+            if let content {
+                NoticePillController.shared.show(content)
+            } else {
+                NoticePillController.shared.hide()
             }
-        }
-        self.notify = notify ?? { title, body in
-            NotificationService.shared.postNow(title: title, body: body)
         }
         if let data = defaults.data(forKey: key),
            let saved = try? JSONDecoder().decode(BreakCycleState.self, from: data) {
@@ -147,20 +173,25 @@ final class BreakCycleManager: ObservableObject {
     /// Begins a fresh cycle (replacing any running one) with the work phase.
     func startCycle(_ config: BreakCycleConfig) {
         sleepStart = nil
-        let fresh = BreakCycleState.started(config, at: clock())
+        shown = []
+        let now = clock()
+        let fresh = BreakCycleState.started(config, at: now)
         state = fresh
         persist()
-        menuBarTitle = fresh.menuBarTitle(at: clock())
+        menuBarTitle = fresh.menuBarTitle(at: now)
         if timerEnabled { startTimer() }
+        notice(Self.workStartNotice(for: fresh, afterBreak: false))
     }
 
     func stop() {
         state = nil
         sleepStart = nil
+        shown = []
         menuBarTitle = ""
         timer?.invalidate()
         timer = nil
         defaults.removeObject(forKey: key)
+        notice(nil)
     }
 
     // MARK: - Tick
@@ -170,18 +201,53 @@ final class BreakCycleManager: ObservableObject {
         let now = clock()
         if let event = current.advance(now: now) {
             state = current
+            shown = []
             persist()
             switch event {
-            case .breakStarted:
-                beep(1)
-                notify("Time for a break", "Rest for \(current.config.breakMinutes) minutes.")
-            case .breakEnded:
-                beep(3)
-                notify("Break over", "Back to work. Next break in \(current.config.workMinutes) minutes.")
+            case .breakStarted: notice(Self.breakStartNotice(for: current))
+            case .breakEnded: notice(Self.workStartNotice(for: current, afterBreak: true))
             }
+        } else if let milestone = current.dueMilestone(at: now, shown: shown) {
+            shown.insert(milestone)
+            // The last seconds also cover "last 10 minutes" if a wake-up jumped
+            // straight past it, so it doesn't pop up late.
+            if milestone == .lastSeconds { shown.insert(.lastTen) }
+            notice(Self.milestoneNotice(milestone, for: current))
         }
         let title = current.menuBarTitle(at: now)
         if title != menuBarTitle { menuBarTitle = title }
+    }
+
+    // MARK: - Popup wording
+
+    static func workStartNotice(for state: BreakCycleState, afterBreak: Bool) -> NoticeContent {
+        let left = Item.durationString(TimeInterval(state.config.workMinutes * 60))
+        return NoticeContent(
+            title: afterBreak ? "Break over · \(left) to go" : "\(left) to go",
+            countdownTo: state.phaseEnd,
+            face: afterBreak ? .happy : .smug
+        )
+    }
+
+    static func breakStartNotice(for state: BreakCycleState) -> NoticeContent {
+        let rest = Item.durationString(TimeInterval(state.config.breakMinutes * 60))
+        return NoticeContent(
+            title: "Time for a break",
+            detail: "Rest for \(rest).",
+            face: .sheepish,
+            duration: 8
+        )
+    }
+
+    static func milestoneNotice(_ milestone: BreakCycleState.Milestone, for state: BreakCycleState) -> NoticeContent {
+        switch milestone {
+        case .lastTen:
+            return NoticeContent(title: "Last 10 minutes to go", countdownTo: state.phaseEnd, face: .owo, duration: 8)
+        case .lastSeconds:
+            let title = state.phase == .work ? "Break time is almost here" : "Break is almost over"
+            // Stays up, counting, until the phase ends and the next popup replaces it.
+            return NoticeContent(title: title, countdownTo: state.phaseEnd, face: .squee, sticky: true)
+        }
     }
 
     // MARK: - Sleep: the cycle pauses while the Mac sleeps

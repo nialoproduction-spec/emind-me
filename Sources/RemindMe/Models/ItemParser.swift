@@ -16,12 +16,25 @@ struct ParsedItem {
     /// Set for "rest every 40 min and take a 10 min break": saving starts the
     /// menu bar break timer instead of adding a routine.
     var breakCycle: BreakCycleConfig? = nil
+    /// What the person picked in the confirmation bar; nil = the default.
+    var chosen: ItemType? = nil
+
+    /// Has a time or interval, so it can be a reminder or a habit.
+    var hasSchedule: Bool { kind != .goal }
+
+    /// Reminder, habit or goal. Text with a time or interval starts out as a
+    /// reminder (the quiet one); text without starts out as a goal.
+    var type: ItemType {
+        if let chosen, chosen == .goal || hasSchedule { return chosen }
+        return hasSchedule ? .reminder : .goal
+    }
 
     /// Schedule description for the confirmation banner (title shown separately).
     var detailLine: String {
         if let breakCycle {
             return "\(breakCycle.breakMinutes) min break · repeats until you stop it"
         }
+        if type == .goal, kind != .goal { return "8 PM check-in" }
         switch kind {
         case .repeatingRoutine:
             guard let intervalSeconds else { return "" }
@@ -42,10 +55,7 @@ struct ParsedItem {
 
     var kindLabel: String {
         if breakCycle != nil { return "Break timer" }
-        switch kind {
-        case .repeatingRoutine, .scheduledRoutine: return "Routine"
-        case .goal: return "Goal"
-        }
+        return type.label
     }
 }
 

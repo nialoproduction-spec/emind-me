@@ -98,6 +98,8 @@ final class MigrationTests: XCTestCase {
         XCTAssertNil(item.pausedUntil)
         XCTAssertNil(item.category)
         XCTAssertNil(item.scheduleEditedAt)
+        XCTAssertNil(item.styleRaw)
+        XCTAssertEqual(item.style, .habit, "routines saved before styles existed keep behaving as habits")
 
         let occurrences = try context.fetch(FetchDescriptor<RemindMe.Occurrence>())
         XCTAssertEqual(occurrences.count, 1)

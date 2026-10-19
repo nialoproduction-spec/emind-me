@@ -27,7 +27,9 @@ final class DeletionTests: XCTestCase {
             escalationSettings: { EscalationSettings(maxReminders: 3, intervalMinutes: 15) },
             isAway: { false },
             resumed: { _ in },
-            weeklySettings: .testing(WeeklySummarySettings(isEnabled: false))
+            weeklySettings: .testing(WeeklySummarySettings(isEnabled: false)),
+            goalNudgeSettings: .testing(GoalNudgeSettings(isEnabled: false)),
+            showNotice: { _ in }
         )
         scheduler.attach(modelContext: context)
     }
@@ -158,7 +160,9 @@ final class StoreRepairTests: XCTestCase {
         XCTAssertEqual(try container.mainContext.fetch(FetchDescriptor<Occurrence>()).count, 0)
         let scheduler = ReminderScheduler(presenter: FakePresenter(), shouldSuppress: { false },
                                           isAway: { false }, resumed: { _ in },
-                                          weeklySettings: .testing(WeeklySummarySettings(isEnabled: false)))
+                                          weeklySettings: .testing(WeeklySummarySettings(isEnabled: false)),
+                                          goalNudgeSettings: .testing(GoalNudgeSettings(isEnabled: false)),
+                                          showNotice: { _ in })
         scheduler.attach(modelContext: container.mainContext)
         scheduler.tick()
     }

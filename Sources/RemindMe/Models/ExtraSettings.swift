@@ -59,6 +59,18 @@ struct WeeklySummarySettings: Codable, Equatable {
     var lastShownWeekKey: String?
 }
 
+// MARK: - Goal check-in
+
+/// Goals never fire on their own schedule; once a day, at this time, a popup
+/// lists the ones still open.
+struct GoalNudgeSettings: Codable, Equatable {
+    var isEnabled = true
+    var hour = 20
+    var minute = 0
+    /// Day it last showed, so it comes once a day.
+    var lastShownDayKey: String?
+}
+
 // MARK: - Smart features
 
 struct SmartSettings: Codable, Equatable {
@@ -107,6 +119,7 @@ enum CategoryStyle {
 enum AppSettings {
     static let snooze = PersistedSettings(key: "snoozeSettings.v1", default: SnoozeSettings())
     static let weekly = PersistedSettings(key: "weeklySummarySettings.v1", default: WeeklySummarySettings())
+    static let goalNudge = PersistedSettings(key: "goalNudge.v1", default: GoalNudgeSettings())
     static let smart = PersistedSettings(key: "smartSettings.v1", default: SmartSettings())
     static let categories = PersistedSettings(key: "categorySettings.v1", default: CategorySettings())
 }

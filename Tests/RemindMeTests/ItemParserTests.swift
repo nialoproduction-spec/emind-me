@@ -13,7 +13,7 @@ final class ItemParserTests: XCTestCase {
         XCTAssertEqual(p.intervalSeconds, 40 * 60)
         XCTAssertEqual(p.title, "Drink water")
         XCTAssertEqual(p.detailLine, "every 40 minutes")
-        XCTAssertEqual(p.kindLabel, "Routine")
+        XCTAssertEqual(p.kindLabel, "Reminder")
     }
 
     func testDrinkWaterEvery40MinutesDigits() {

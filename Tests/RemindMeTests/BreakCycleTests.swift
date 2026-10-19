@@ -33,7 +33,7 @@ final class BreakCycleParserTests: XCTestCase {
         let p = ItemParser.parse("drink water every 40 minutes")
         XCTAssertNil(p.breakCycle)
         XCTAssertEqual(p.kind, .repeatingRoutine)
-        XCTAssertEqual(p.kindLabel, "Routine")
+        XCTAssertEqual(p.kindLabel, "Reminder")
     }
 
     func testBreakWithoutAnIntervalIsNotABreakTimer() {
@@ -92,44 +92,109 @@ final class BreakCycleStateTests: XCTestCase {
         state.advance(now: breakStart)
         XCTAssertEqual(state.menuBarTitle(at: breakStart.addingTimeInterval(18)), "Break 9:42")
     }
+
+    func testLastTenMinutesHeadsUpForALongWorkStretch() {
+        let state = BreakCycleState.started(config, at: t0)
+        let at31 = t0.addingTimeInterval(31 * 60)
+        XCTAssertNil(state.dueMilestone(at: at31, shown: []))
+        let at30 = t0.addingTimeInterval(30 * 60)
+        XCTAssertEqual(state.dueMilestone(at: at30, shown: []), .lastTen)
+        XCTAssertNil(state.dueMilestone(at: at30, shown: [.lastTen]), "only once per phase")
+    }
+
+    func testLastSecondsStartsAtTen() {
+        let state = BreakCycleState.started(config, at: t0)
+        let at11 = t0.addingTimeInterval(40 * 60 - 11)
+        XCTAssertNil(state.dueMilestone(at: at11, shown: [.lastTen]))
+        let at10 = t0.addingTimeInterval(40 * 60 - 10)
+        XCTAssertEqual(state.dueMilestone(at: at10, shown: [.lastTen]), .lastSeconds)
+    }
+
+    func testShortCyclesSkipLastTenMinutes() {
+        let state = BreakCycleState.started(BreakCycleConfig(workMinutes: 5, breakMinutes: 1), at: t0)
+        XCTAssertNil(state.dueMilestone(at: t0.addingTimeInterval(60), shown: []))
+        XCTAssertEqual(state.dueMilestone(at: t0.addingTimeInterval(5 * 60 - 3), shown: []), .lastSeconds)
+    }
+
+    func testBreaksNeverGetALastTenMinutesPopup() {
+        var state = BreakCycleState.started(BreakCycleConfig(workMinutes: 40, breakMinutes: 30), at: t0)
+        state.advance(now: t0.addingTimeInterval(40 * 60))
+        let midBreak = t0.addingTimeInterval(40 * 60 + 25 * 60)
+        XCTAssertNil(state.dueMilestone(at: midBreak, shown: []))
+    }
 }
 
 @MainActor
 final class BreakCycleManagerTests: XCTestCase {
     private var now = Date(timeIntervalSinceReferenceDate: 2_000_000)
-    private var beeps: [Int] = []
-    private var notices: [String] = []
+    /// Every popup the manager asked for; nil = "put the popup away".
+    private var popups: [NoticeContent?] = []
 
-    private func makeManager() -> BreakCycleManager {
-        let defaults = UserDefaults(suiteName: "BreakCycleTests-\(UUID().uuidString)")!
-        return BreakCycleManager(
-            defaults: defaults,
+    private var titles: [String] { popups.compactMap { $0?.title } }
+
+    private func makeManager(defaults: UserDefaults? = nil) -> BreakCycleManager {
+        BreakCycleManager(
+            defaults: defaults ?? UserDefaults(suiteName: "BreakCycleTests-\(UUID().uuidString)")!,
             now: { [unowned self] in self.now },
-            beep: { [unowned self] count in self.beeps.append(count) },
-            notify: { [unowned self] title, _ in self.notices.append(title) }
+            notice: { [unowned self] in self.popups.append($0) }
         )
     }
 
-    func testFullCycleBeepsAtBreakStartAndAtBreakEnd() {
+    func testStartingShowsHowLongToGoWithACountdown() throws {
         let manager = makeManager()
         manager.startCycle(BreakCycleConfig(workMinutes: 40, breakMinutes: 10))
         XCTAssertEqual(manager.menuBarTitle, "40:00")
+        let popup = try XCTUnwrap(popups.last ?? nil)
+        XCTAssertEqual(popup.title, "40 minutes to go")
+        XCTAssertEqual(popup.countdownTo, now.addingTimeInterval(40 * 60))
+        XCTAssertFalse(popup.sticky)
+    }
 
-        now.addTimeInterval(40 * 60)
+    func testFullCycleWithPopupsAtEveryMoment() throws {
+        let manager = makeManager()
+        manager.startCycle(BreakCycleConfig(workMinutes: 40, breakMinutes: 10))
+
+        now.addTimeInterval(20 * 60)
         manager.tick()
-        XCTAssertEqual(beeps, [1])
-        XCTAssertEqual(notices, ["Time for a break"])
+        XCTAssertEqual(titles, ["40 minutes to go"], "quiet in the middle")
+
+        now.addTimeInterval(10 * 60) // 10 minutes left
+        manager.tick()
+        XCTAssertEqual(titles.last, "Last 10 minutes to go")
+
+        now.addTimeInterval(10 * 60 - 10) // 10 seconds left
+        manager.tick()
+        let last = try XCTUnwrap(popups.last ?? nil)
+        XCTAssertEqual(last.title, "Break time is almost here")
+        XCTAssertTrue(last.sticky, "the last seconds stay on screen, counting")
+        manager.tick()
+        XCTAssertEqual(popups.count, 4, "and it isn't re-shown every tick")
+
+        now.addTimeInterval(10)
+        manager.tick()
+        let breakPopup = try XCTUnwrap(popups.last ?? nil)
+        XCTAssertEqual(breakPopup.title, "Time for a break")
+        XCTAssertEqual(breakPopup.detail, "Rest for 10 minutes.")
+        XCTAssertNotNil(breakPopup.face, "a face, not an app icon")
         XCTAssertEqual(manager.menuBarTitle, "Break 10:00")
 
-        now.addTimeInterval(60)
+        now.addTimeInterval(10 * 60)
         manager.tick()
-        XCTAssertEqual(manager.menuBarTitle, "Break 9:00")
-
-        now.addTimeInterval(9 * 60)
-        manager.tick()
-        XCTAssertEqual(beeps, [1, 3], "a longer beep when the break is over")
-        XCTAssertEqual(notices, ["Time for a break", "Break over"])
+        XCTAssertEqual(titles.last, "Break over · 40 minutes to go")
         XCTAssertEqual(manager.state?.phase, .work, "and the next work stretch has begun")
+    }
+
+    func testOneMinuteTestCycle() throws {
+        let manager = makeManager()
+        manager.startCycle(BreakCycleConfig(workMinutes: 1, breakMinutes: 1))
+        XCTAssertEqual(titles, ["1 minute to go"])
+        now.addTimeInterval(50)
+        manager.tick()
+        XCTAssertEqual(titles.last, "Break time is almost here")
+        now.addTimeInterval(10)
+        manager.tick()
+        let breakPopup = try XCTUnwrap(popups.last ?? nil)
+        XCTAssertEqual(breakPopup.detail, "Rest for 1 minute.", "singular, not '1 minutes'")
     }
 
     func testSleepPausesTheCycle() {
@@ -139,37 +204,30 @@ final class BreakCycleManagerTests: XCTestCase {
         manager.willSleep()
         now.addTimeInterval(3 * 3600) // asleep for three hours
         manager.tick()
-        XCTAssertTrue(beeps.isEmpty, "nothing fires while asleep")
+        XCTAssertEqual(titles, ["40 minutes to go"], "nothing pops up while asleep")
 
         manager.didWake()
-        XCTAssertTrue(beeps.isEmpty, "sleep doesn't count as work")
-        XCTAssertEqual(manager.menuBarTitle, "30:00")
+        XCTAssertEqual(manager.menuBarTitle, "30:00", "sleep doesn't count as work")
         XCTAssertEqual(manager.state?.phase, .work)
     }
 
-    func testStopClearsTheMenuBarAndTheSavedCycle() {
+    func testStopClearsTheMenuBarThePopupAndTheSavedCycle() {
         let defaults = UserDefaults(suiteName: "BreakCycleTests-\(UUID().uuidString)")!
-        let manager = BreakCycleManager(defaults: defaults, now: { [unowned self] in self.now },
-                                        beep: { _ in }, notify: { _, _ in })
+        let manager = makeManager(defaults: defaults)
         manager.startCycle(BreakCycleConfig(workMinutes: 40, breakMinutes: 10))
         manager.stop()
         XCTAssertFalse(manager.isRunning)
         XCTAssertEqual(manager.menuBarTitle, "")
+        XCTAssertNil(popups.last ?? NoticeContent(title: "still showing"), "the popup is put away")
 
-        let reloaded = BreakCycleManager(defaults: defaults, now: { [unowned self] in self.now },
-                                         beep: { _ in }, notify: { _, _ in })
-        XCTAssertFalse(reloaded.isRunning)
+        XCTAssertFalse(makeManager(defaults: defaults).isRunning)
     }
 
     func testARunningCycleSurvivesARestart() {
         let defaults = UserDefaults(suiteName: "BreakCycleTests-\(UUID().uuidString)")!
-        let first = BreakCycleManager(defaults: defaults, now: { [unowned self] in self.now },
-                                      beep: { _ in }, notify: { _, _ in })
+        let first = makeManager(defaults: defaults)
         first.startCycle(BreakCycleConfig(workMinutes: 40, breakMinutes: 10))
         now.addTimeInterval(5 * 60)
-
-        let second = BreakCycleManager(defaults: defaults, now: { [unowned self] in self.now },
-                                       beep: { _ in }, notify: { _, _ in })
-        XCTAssertEqual(second.menuBarTitle, "35:00")
+        XCTAssertEqual(makeManager(defaults: defaults).menuBarTitle, "35:00")
     }
 }

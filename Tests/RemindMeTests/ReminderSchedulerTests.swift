@@ -30,6 +30,8 @@ final class ReminderSchedulerTests: XCTestCase {
     private var snoozeDefault = 5
     private var resumedTitles: [String] = []
     private var weekly: PersistedSettings<WeeklySummarySettings>!
+    private var goalNudge: PersistedSettings<GoalNudgeSettings>!
+    private var notices: [NoticeContent] = []
     private var scheduler: ReminderScheduler!
 
     /// Fresh in-memory store + scheduler for each test (XCTest makes a new
@@ -42,6 +44,7 @@ final class ReminderSchedulerTests: XCTestCase {
         context = container.mainContext
         presenter = FakePresenter()
         weekly = .testing(WeeklySummarySettings(isEnabled: false))
+        goalNudge = .testing(GoalNudgeSettings(isEnabled: false))
         scheduler = ReminderScheduler(
             presenter: presenter,
             now: { [unowned self] in self.clock },
@@ -50,7 +53,9 @@ final class ReminderSchedulerTests: XCTestCase {
             isAway: { [unowned self] in self.away },
             defaultSnoozeMinutes: { [unowned self] in self.snoozeDefault },
             resumed: { [unowned self] in self.resumedTitles.append($0.title) },
-            weeklySettings: weekly
+            weeklySettings: weekly,
+            goalNudgeSettings: goalNudge,
+            showNotice: { [unowned self] in self.notices.append($0) }
         )
         scheduler.attach(modelContext: context)
     }
@@ -69,6 +74,70 @@ final class ReminderSchedulerTests: XCTestCase {
 
     private func occurrences() -> [Occurrence] {
         (try? context.fetch(FetchDescriptor<Occurrence>())) ?? []
+    }
+
+    // MARK: - Reminder style / goal check-in
+
+    func testJustRemindShowsAPopupWithNoOccurrence() throws {
+        try makeFixture()
+        let item = addRepeating(everyMinutes: 40, title: "Drink water")
+        item.styleRaw = ReminderStyle.justRemind.rawValue
+        advance(minutes: 1)
+        scheduler.tick()
+
+        XCTAssertEqual(occurrences().count, 0, "nothing to tick off")
+        XCTAssertEqual(presenter.liveShown, 0, "no card with buttons")
+        XCTAssertEqual(notices.map(\.title), ["Drink water"])
+        XCTAssertNotNil(item.nextFireDate)
+        XCTAssertGreaterThan(item.nextFireDate ?? .distantPast, clock)
+    }
+
+    func testJustRemindIsHeldWhileFocusIsOn() throws {
+        try makeFixture()
+        let item = addRepeating(everyMinutes: 40)
+        item.styleRaw = ReminderStyle.justRemind.rawValue
+        suppressed = true
+        advance(minutes: 1)
+        scheduler.tick()
+        XCTAssertTrue(notices.isEmpty)
+        XCTAssertGreaterThan(item.nextFireDate ?? .distantPast, clock, "still moves on")
+    }
+
+    func testGoalNudgeTimingAndOncePerDay() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        let day = cal.date(from: DateComponents(year: 2026, month: 3, day: 3, hour: 19, minute: 59))!
+        let eight = cal.date(from: DateComponents(year: 2026, month: 3, day: 3, hour: 20, minute: 0))!
+        var settings = GoalNudgeSettings()
+        XCTAssertFalse(ReminderScheduler.shouldShowGoalNudge(settings: settings, now: day, calendar: cal))
+        XCTAssertTrue(ReminderScheduler.shouldShowGoalNudge(settings: settings, now: eight, calendar: cal))
+        settings.lastShownDayKey = Occurrence.dayKey(for: eight, calendar: cal)
+        XCTAssertFalse(ReminderScheduler.shouldShowGoalNudge(settings: settings, now: eight, calendar: cal))
+        settings.lastShownDayKey = nil
+        settings.isEnabled = false
+        XCTAssertFalse(ReminderScheduler.shouldShowGoalNudge(settings: settings, now: eight, calendar: cal))
+    }
+
+    func testTypeChooserMapping() {
+        var parsed = ItemParser.parse("Drink water every 40 minutes")
+        XCTAssertEqual(parsed.type, .reminder)
+        parsed.chosen = .habit
+        XCTAssertEqual(parsed.type, .habit)
+        parsed.chosen = .goal
+        XCTAssertEqual(parsed.type, .goal)
+
+        var plain = ItemParser.parse("Go to Godavari")
+        XCTAssertEqual(plain.type, .goal)
+        plain.chosen = .habit
+        XCTAssertEqual(plain.type, .goal, "no schedule, so it can't be a habit")
+
+        var habit = ItemParser.parse("Stretch every 2 hours")
+        habit.chosen = .habit
+        XCTAssertEqual(Item(from: habit).style, .habit)
+        habit.chosen = .reminder
+        XCTAssertEqual(Item(from: habit).style, .justRemind)
+        habit.chosen = .goal
+        XCTAssertEqual(Item(from: habit).kind, .goal)
     }
 
     // MARK: - Firing
