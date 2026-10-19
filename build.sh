@@ -44,6 +44,12 @@ mkdir -p "${APP_DIR}/Contents/MacOS"
 mkdir -p "${APP_DIR}/Contents/Resources"
 
 cp "${BUILD_DIR}/${APP_NAME}" "${APP_DIR}/Contents/MacOS/${APP_NAME}"
+# Smaller app: drop debug and local symbols from the release binary (it's
+# already built with -O and whole-module optimisation by -c release).
+BEFORE=$(stat -f%z "${APP_DIR}/Contents/MacOS/${APP_NAME}" 2>/dev/null || echo 0)
+strip -Sx "${APP_DIR}/Contents/MacOS/${APP_NAME}"
+AFTER=$(stat -f%z "${APP_DIR}/Contents/MacOS/${APP_NAME}" 2>/dev/null || echo 0)
+echo "   binary: ${BEFORE} -> ${AFTER} bytes"
 cp "Resources/Info.plist" "${APP_DIR}/Contents/Info.plist"
 
 if [ -f "Resources/AppIcon.icns" ]; then
@@ -61,11 +67,12 @@ cp -R "${APP_DIR}" "${DMG_STAGING}/"
 ln -s /Applications "${DMG_STAGING}/Applications"
 
 rm -f "${DMG_PATH}"
+# ULFO = LZFSE compression: smaller and faster to open than the old UDZO.
 # hdiutil occasionally fails with "Resource busy" (common on CI Macs) —
 # retry a few times before giving up.
 for attempt in 1 2 3; do
     if hdiutil create -volname "${DISPLAY_NAME}" -srcfolder "${DMG_STAGING}" \
-        -fs HFS+ -ov -format UDZO "${DMG_PATH}"; then
+        -fs HFS+ -ov -format ULFO "${DMG_PATH}"; then
         break
     fi
     if [ "$attempt" = 3 ]; then

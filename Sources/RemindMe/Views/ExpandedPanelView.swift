@@ -85,7 +85,7 @@ struct ExpandedPanelView: View {
     /// was switched to a reminder).
     private var sortedToday: [Occurrence] {
         todayOccurrences
-            .filter { ($0.item?.style ?? .habit) == .habit && matchesFilter($0.item) }
+            .filter { ($0.item?.style ?? .habit) == .habit && $0.item?.kind != .goal && matchesFilter($0.item) }
             .sorted { $0.scheduledFireDate < $1.scheduledFireDate }
     }
 
@@ -131,8 +131,17 @@ struct ExpandedPanelView: View {
     }
 
     private func streak(for item: Item) -> Int {
-        guard item.kind != .goal else { return 0 }
-        return Insights.streak(Insights.dailyRecords(Insights.occurrences(of: item, in: occurrences), days: 60, now: .now))
+        Insights.streak(Insights.dailyRecords(Insights.occurrences(of: item, in: occurrences), days: 60, now: .now))
+    }
+
+    /// Times done, all time. Plain reminders have nothing to count.
+    private func total(for item: Item) -> Int {
+        guard item.style == .habit || item.kind == .goal else { return 0 }
+        return Insights.occurrences(of: item, in: occurrences).filter { $0.status == .done }.count
+    }
+
+    private func doneToday(_ item: Item) -> Bool {
+        GoalCheckIn.todaysAnswer(for: item, in: occurrences, now: .now)?.status == .done
     }
 
     // MARK: - Body
@@ -270,7 +279,9 @@ struct ExpandedPanelView: View {
         ReminderRowView(
             item: item,
             theme: theme,
-            streak: streak(for: item),
+            streak: item.style == .justRemind && item.kind != .goal ? 0 : streak(for: item),
+            total: total(for: item),
+            doneToday: item.kind == .goal && doneToday(item),
             onToggle: { toggle(item) },
             onPause: { pause(item, for: $0) }
         )
@@ -289,8 +300,8 @@ struct ExpandedPanelView: View {
         }
         .swipeActions(edge: .leading, allowsFullSwipe: true) {
             if item.kind == .goal {
-                Button { item.isAchieved.toggle() } label: {
-                    Label(item.isAchieved ? "Not yet" : "Achieved", systemImage: "checkmark")
+                Button { toggle(item) } label: {
+                    Label(doneToday(item) ? "Undo" : "Done today", systemImage: "checkmark")
                 }
                 .tint(theme.accent)
             } else if item.isActive {
@@ -312,7 +323,12 @@ struct ExpandedPanelView: View {
     private func itemMenu(_ item: Item) -> some View {
         Button("Edit…") { editing = item }
         if item.kind == .goal {
-            Button(item.isAchieved ? "Mark not achieved" : "Mark achieved") { item.isAchieved.toggle() }
+            if !item.isAchieved {
+                Button("Done today") { GoalCheckIn.answer(item, done: true, now: .now, in: modelContext) }
+                Button("Not today") { GoalCheckIn.answer(item, done: false, now: .now, in: modelContext) }
+            }
+            Button(item.isAchieved ? "Not finished after all" : "Finished for good (stop asking)") { item.isAchieved.toggle() }
+            Button("History & streak") { historyOf = item }
         } else {
             Button(item.style == .habit ? "Make it a Reminder (no buttons)" : "Make it a Habit (tap Done)") {
                 item.style = item.style == .habit ? .justRemind : .habit
@@ -506,45 +522,11 @@ struct ExpandedPanelView: View {
 
     // MARK: - Confirmation
 
+    /// The live preview: what Enter will save. The type is picked for you
+    /// (a time → Reminder, no time → Goal); the Habit button beside the
+    /// arrow saves it as a habit instead.
     private func confirmationBar(_ parsed: ParsedItem) -> some View {
-        VStack(spacing: 0) {
-            confirmationRow(parsed)
-            if parsed.breakCycle == nil {
-                typeChooser(parsed)
-            }
-        }
-    }
-
-    /// Reminder / Habit / Goal. Reminder and Habit need a time or interval in
-    /// the text, so they're greyed out when there isn't one.
-    private func typeChooser(_ parsed: ParsedItem) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 6) {
-                ForEach(ItemType.allCases, id: \.self) { type in
-                    let available = type == .goal || parsed.hasSchedule
-                    let selected = parsed.type == type
-                    Button { draft.chosen = type } label: {
-                        Label(type.label, systemImage: type.icon)
-                            .font(.system(size: theme.fontSize - 2, weight: selected ? .semibold : .regular))
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 4)
-                            .foregroundStyle(selected ? theme.accent : theme.text.opacity(available ? 0.7 : 0.25))
-                            .background(selected ? theme.accent.opacity(0.2) : theme.text.opacity(0.06))
-                            .clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!available)
-                }
-                Spacer()
-            }
-            Text(parsed.type.explanation)
-                .font(.system(size: theme.fontSize - 3))
-                .foregroundStyle(theme.text.opacity(0.5))
-        }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(theme.accent.opacity(0.08))
+        confirmationRow(parsed)
     }
 
     private func confirmationRow(_ parsed: ParsedItem) -> some View {
@@ -607,6 +589,8 @@ struct ExpandedPanelView: View {
                 .focused($fieldFocused)
                 .onSubmit(handleSubmit)
 
+            habitButton
+
             Button(action: handleSubmit) {
                 Image(systemName: "arrow.up.circle.fill")
                     .foregroundStyle(theme.accent)
@@ -616,6 +600,31 @@ struct ExpandedPanelView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+    }
+
+    /// Saves what's typed as a habit (tap Done every time) instead of a
+    /// plain reminder. Needs a time or interval in the text. ⌘↩ does the same.
+    private var habitButton: some View {
+        let preview = draft.preview
+        let usable = preview.map { $0.hasSchedule && $0.breakCycle == nil } ?? false
+        return Button(action: saveAsHabit) {
+            Label("Habit", systemImage: "checkmark.circle")
+                .font(.system(size: theme.fontSize - 2, weight: .semibold))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .foregroundStyle(usable ? ReminderRowView.onColor : theme.text.opacity(0.25))
+                .background((usable ? ReminderRowView.onColor : theme.text).opacity(usable ? 0.16 : 0.05))
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(!usable)
+        .keyboardShortcut(.return, modifiers: .command)
+        .help(usable ? "Save as a habit — you tap Done each time (⌘↩)" : "Add a time first, like “every 2 hours”")
+    }
+
+    private func saveAsHabit() {
+        draft.chosen = .habit
+        saveConfirmed()
     }
 
     // MARK: - Actions
@@ -668,7 +677,13 @@ struct ExpandedPanelView: View {
 
     private func toggle(_ item: Item) {
         if item.kind == .goal {
-            item.isAchieved.toggle()
+            if item.isAchieved {
+                item.isAchieved = false
+            } else if let answer = GoalCheckIn.todaysAnswer(for: item, in: occurrences, now: .now), answer.status == .done {
+                OccurrenceActions.delete(answer, in: modelContext)
+            } else {
+                GoalCheckIn.answer(item, done: true, now: .now, in: modelContext)
+            }
         } else if item.isActive {
             pause(item, for: .indefinitely)
         } else {

@@ -140,6 +140,119 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertEqual(Item(from: habit).kind, .goal)
     }
 
+    // MARK: - Smarter typing
+
+    func testRemindMeToIsDropped() {
+        let p = ItemParser.parse("remind me to drink water every 4 minute")
+        XCTAssertEqual(p.title, "Drink water")
+        XCTAssertEqual(p.intervalSeconds, 240)
+        XCTAssertEqual(p.type, .reminder, "a time → just a reminder, no clicking")
+        XCTAssertEqual(ItemParser.parse("Reminder: stretch every hour").title, "Stretch")
+        XCTAssertEqual(ItemParser.parse("don't forget to call mom at 5pm").title, "Call mom")
+        XCTAssertEqual(ItemParser.parse("remind me").title, "Remind me", "nothing after it: kept as typed")
+    }
+
+    func testTyposInEveryAndUnits() {
+        XCTAssertEqual(ItemParser.parse("drink water rvry 4 minute").intervalSeconds, 240)
+        XCTAssertEqual(ItemParser.parse("drink water rvrry 4 minute").title, "Drink water")
+        XCTAssertEqual(ItemParser.parse("drink water evry 4 minuts").intervalSeconds, 240)
+        XCTAssertEqual(ItemParser.parse("stretch evrey 2 houres").intervalSeconds, 7200)
+        XCTAssertEqual(ItemParser.parse("sleep over 2 hours").kind, .goal, "real words aren't 'fixed'")
+        XCTAssertEqual(ItemParser.editDistance("rvry", "every"), 2)
+    }
+
+    func testNoTimeIsAGoalAutomatically() {
+        let p = ItemParser.parse("finish the Sharma wedding edit")
+        XCTAssertEqual(p.type, .goal)
+        XCTAssertFalse(p.hasSchedule, "so the Habit button is off")
+    }
+
+    // MARK: - Goal check-in
+
+    private func turnOnGoalCheckIn() {
+        goalNudge.value = GoalNudgeSettings(isEnabled: true, hour: 0, minute: 0)
+    }
+
+    private func addGoal(_ title: String = "Edit 2 hours") -> Item {
+        let goal = Item(title: title, kind: .goal)
+        context.insert(goal)
+        return goal
+    }
+
+    func testCheckInOpensWithOpenGoalsOncePerDay() throws {
+        try makeFixture()
+        turnOnGoalCheckIn()
+        _ = addGoal()
+        scheduler.tick()
+        XCTAssertTrue(scheduler.showGoalCheckIn)
+        XCTAssertEqual(presenter.overlayShown, 1)
+
+        scheduler.dismissGoalCheckIn() // Later
+        scheduler.tick()
+        XCTAssertFalse(scheduler.showGoalCheckIn, "Later means tomorrow")
+        XCTAssertEqual(presenter.overlayShown, 1)
+    }
+
+    func testNoGoalsNoCheckIn() throws {
+        try makeFixture()
+        turnOnGoalCheckIn()
+        let done = addGoal()
+        done.isAchieved = true
+        scheduler.tick()
+        XCTAssertFalse(scheduler.showGoalCheckIn)
+    }
+
+    func testDoneAndNotTodayAreRecordedAndCloseTheCheckIn() throws {
+        try makeFixture()
+        turnOnGoalCheckIn()
+        let edit = addGoal("Edit 2 hours")
+        let gym = addGoal("Gym")
+        scheduler.tick()
+        XCTAssertTrue(scheduler.showGoalCheckIn)
+
+        scheduler.answerGoal(edit, done: true)
+        XCTAssertTrue(scheduler.showGoalCheckIn, "one still waiting")
+        scheduler.answerGoal(gym, done: false)
+        XCTAssertFalse(scheduler.showGoalCheckIn, "all answered: it closes")
+
+        let answers = occurrences()
+        XCTAssertEqual(answers.count, 2)
+        XCTAssertEqual(answers.first { $0.item?.title == "Edit 2 hours" }?.status, .done)
+        XCTAssertEqual(answers.first { $0.item?.title == "Gym" }?.status, .skipped, "Not today")
+        XCTAssertTrue(answers.allSatisfy { $0.nextEscalationAt == nil }, "answers never nag")
+
+        // Changing your mind the same day replaces the answer.
+        scheduler.answerGoal(gym, done: true)
+        XCTAssertEqual(occurrences().count, 2)
+        XCTAssertEqual(GoalCheckIn.todaysAnswer(for: gym, in: occurrences(), now: clock)?.status, .done)
+        XCTAssertTrue(GoalCheckIn.unanswered(goals: [edit, gym], occurrences: occurrences(), now: clock).isEmpty)
+    }
+
+    func testGoalAnswersMakeAStreak() throws {
+        try makeFixture()
+        let goal = addGoal()
+        for day in 0..<3 {
+            GoalCheckIn.answer(goal, done: true, now: clock.addingTimeInterval(Double(-day) * 86400), in: context)
+        }
+        let mine = Insights.occurrences(of: goal, in: occurrences())
+        XCTAssertEqual(mine.filter { $0.status == .done }.count, 3, "3 total")
+        XCTAssertEqual(Insights.streak(Insights.dailyRecords(mine, days: 60, now: clock)), 3, "3 days in a row")
+    }
+
+    func testGoalAnswersDontPopAnything() throws {
+        try makeFixture()
+        let goal = addGoal()
+        GoalCheckIn.answer(goal, done: false, now: clock, in: context)
+        advance(minutes: 30)
+        scheduler.tick()
+        XCTAssertEqual(presenter.liveShown, 0)
+        XCTAssertNil(scheduler.activeOccurrence)
+    }
+
+    func testSnoozeChoicesDefaultTo5_10_30() {
+        XCTAssertEqual(SnoozeSettings().presets, [5, 10, 30])
+    }
+
     func testIslandSitsOnTheNotch() {
         let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
         let layout = IslandGeometry.layout(screenFrame: screen, notch: CGSize(width: 185, height: 32))

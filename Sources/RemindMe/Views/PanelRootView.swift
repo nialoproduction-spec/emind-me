@@ -21,6 +21,7 @@ struct PanelRootView: View {
 
     private enum Layer {
         case live(Occurrence)
+        case goalCheckIn
         case endOfDay
         case weekly
         case expanded
@@ -29,6 +30,7 @@ struct PanelRootView: View {
 
     private var layer: Layer {
         if let occurrence = scheduler.activeOccurrence { return .live(occurrence) }
+        if scheduler.showGoalCheckIn { return .goalCheckIn }
         if scheduler.showEndOfDaySummary { return .endOfDay }
         if scheduler.showWeeklySummary { return .weekly }
         if controller.isHiding, let held = heldOverlay { return held }
@@ -52,6 +54,9 @@ struct PanelRootView: View {
             case .live(let occurrence):
                 LiveReminderView(occurrence: occurrence, theme: themeStore.theme)
                     .id(occurrence.id) // fresh face + reaction state for every reminder
+                    .transition(.opacity)
+            case .goalCheckIn:
+                GoalCheckInView(items: items, occurrences: occurrences, theme: themeStore.theme)
                     .transition(.opacity)
             case .endOfDay:
                 EndOfDaySummaryView(
@@ -97,6 +102,13 @@ struct PanelRootView: View {
         .onChange(of: scheduler.activeOccurrence?.id) {
             if let occurrence = scheduler.activeOccurrence {
                 heldOverlay = .live(occurrence)
+            } else if !controller.isHiding {
+                heldOverlay = nil
+            }
+        }
+        .onChange(of: scheduler.showGoalCheckIn) {
+            if scheduler.showGoalCheckIn {
+                heldOverlay = .goalCheckIn
             } else if !controller.isHiding {
                 heldOverlay = nil
             }

@@ -6,6 +6,7 @@ import SwiftUI
 struct SmartSettingsView: View {
     @ObservedObject private var snooze = AppSettings.snooze
     @ObservedObject private var weekly = AppSettings.weekly
+    @ObservedObject private var goalNudge = AppSettings.goalNudge
     @ObservedObject private var smart = AppSettings.smart
     @ObservedObject private var categories = AppSettings.categories
     @State private var newCategory = ""
@@ -13,6 +14,8 @@ struct SmartSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             snoozeSection
+            Divider()
+            goalSection
             Divider()
             weeklySection
             Divider()
@@ -46,10 +49,44 @@ struct SmartSettingsView: View {
                 .controlSize(.small)
             }
         }
-        Text("Snooze on a reminder offers these (up to four). The shortest is used by a plain Snooze and \(GlobalHotkeys.label(for: .snooze)).")
+        Text("A habit's card shows these as buttons (up to three). The shortest is used by \(GlobalHotkeys.label(for: .snooze)) and the S key.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
+    }
+
+    // MARK: - Goal check-in
+
+    @ViewBuilder
+    private var goalSection: some View {
+        Text("Goal check-in").font(.headline)
+        Toggle("Ask about my goals every day", isOn: $goalNudge.value.isEnabled)
+        if goalNudge.value.isEnabled {
+            DatePicker("At", selection: goalTime, displayedComponents: .hourAndMinute)
+                .datePickerStyle(.field)
+        }
+        Text("Each goal gets Done or Not today, so you can see how often you hit it.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var goalTime: Binding<Date> {
+        Binding(
+            get: {
+                var comps = DateComponents()
+                comps.hour = goalNudge.value.hour
+                comps.minute = goalNudge.value.minute
+                return Calendar.current.date(from: comps) ?? .now
+            },
+            set: { date in
+                let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
+                goalNudge.value.hour = parts.hour ?? 20
+                goalNudge.value.minute = parts.minute ?? 0
+                // A later time can still ask today.
+                goalNudge.value.lastShownDayKey = nil
+            }
+        )
     }
 
     // MARK: - Weekly summary

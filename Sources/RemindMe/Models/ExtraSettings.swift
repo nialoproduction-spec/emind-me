@@ -32,7 +32,7 @@ final class PersistedSettings<Value: Codable & Equatable>: ObservableObject {
 struct SnoozeSettings: Codable, Equatable {
     /// Lengths offered on the reminder, in minutes, shortest first. The first
     /// is what a plain Snooze (or the keyboard shortcut) uses.
-    var presets: [Int] = [5, 15, 30, 60]
+    var presets: [Int] = [5, 10, 30]
 
     static let choices = [5, 10, 15, 20, 30, 45, 60, 90, 120]
 

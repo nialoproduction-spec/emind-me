@@ -64,9 +64,12 @@ struct ParsedItem {
 /// app's "no cloud, no account" brief, and keeps this instant.
 enum ItemParser {
     static func parse(_ raw: String) -> ParsedItem {
+        // Typos in "every" ("evry", "rvry 4 min") are fixed and "remind me
+        // to" is dropped first, so they never reach the title or the rules.
+        let cleaned = dropLeadIn(fixEveryTypos(raw))
         // Hashtags first: "#work" anywhere sets the category and is taken out
         // of the text before anything else reads it.
-        let (withoutTags, category) = extractCategory(from: raw)
+        let (withoutTags, category) = extractCategory(from: cleaned)
         // "work 25 min and rest 5 min", "work every 1 minute break every 10
         // minute", "40 min work 10 min rest": both lengths named outright.
         if let (work, rest) = workAndRest(in: withoutTags) {
@@ -109,6 +112,63 @@ enum ItemParser {
         return nil
     }
 
+    // MARK: - Clean-up before parsing
+
+    /// "remind me to drink water…" → "drink water…". Also "please remind
+    /// me to", "remind me about", "reminder:", "don't forget to".
+    static func dropLeadIn(_ text: String) -> String {
+        let ns = text as NSString
+        guard let match = leadInRegex.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)) else { return text }
+        let rest = ns.substring(from: match.range.location + match.range.length)
+        return rest.trimmingCharacters(in: .whitespaces).isEmpty ? text : rest
+    }
+
+    private static let leadInRegex = try! NSRegularExpression(
+        pattern: #"^\s*(?:please\s+)?(?:(?:remind|rmind|remid|remnd)\s+me\s+(?:to\s+|about\s+|that\s+)?|reminder\s*(?::|to\b)?\s*|(?:don'?t|dont|do\s+not)\s+forget\s+(?:to\s+)?)"#,
+        options: [.caseInsensitive]
+    )
+
+    /// A word that's close to "every" ("evry", "rvry", "rvrry", "evrey") and
+    /// is followed by a number or a unit becomes "every". Real words that
+    /// look alike ("over", "even") are left alone.
+    static func fixEveryTypos(_ text: String) -> String {
+        let ns = text as NSString
+        let matches = everyTypoRegex.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else { return text }
+        let result = NSMutableString(string: text)
+        for match in matches.reversed() {
+            let word = ns.substring(with: match.range).lowercased()
+            guard word != "every", !["over", "even", "eve"].contains(word),
+                  editDistance(word, "every") <= 2 else { continue }
+            result.replaceCharacters(in: match.range, with: "every")
+        }
+        return result as String
+    }
+
+    private static let everyTypoRegex = try! NSRegularExpression(
+        pattern: #"\b[a-z]{3,7}\b(?=\s*(?:\d|(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty|forty|fifty|sixty|half)\b|(?:sec|min|hour|hr|day|week)[a-z]*\b))"#,
+        options: [.caseInsensitive]
+    )
+
+    /// Levenshtein distance; words here are a few letters, so the simple
+    /// table is plenty.
+    static func editDistance(_ a: String, _ b: String) -> Int {
+        let a = Array(a), b = Array(b)
+        if a.isEmpty { return b.count }
+        if b.isEmpty { return a.count }
+        var previous = Array(0...b.count)
+        for i in 1...a.count {
+            var current = [i] + Array(repeating: 0, count: b.count)
+            for j in 1...b.count {
+                current[j] = a[i - 1] == b[j - 1]
+                    ? previous[j - 1]
+                    : 1 + min(previous[j - 1], previous[j], current[j - 1])
+            }
+            previous = current
+        }
+        return previous[b.count]
+    }
+
     /// Work and rest lengths (seconds) when the text names both with the
     /// words "work" and "rest"/"break". The work part is cut out before the
     /// rest part is looked for, so one number is never read twice.
@@ -140,7 +200,7 @@ enum ItemParser {
 
     /// Units, long forms first so "min" never stops short of "minutes";
     /// h / m / s only as whole words ("40m", "2 h", "30s").
-    private static let durationUnit = #"(?:hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)\b"#
+    private static let durationUnit = #"(?:hou?r[a-z]*|hr[a-z]*|h|min[a-z]*|m|sec[a-z]*|s)\b"#
 
     /// "work 40 min", "work for 25 minutes", "work every 1 minute", "focus 2h".
     private static let workBeforeRegex = try! NSRegularExpression(
@@ -426,9 +486,13 @@ enum ItemParser {
         // Words + full unit ("every forty minutes"), digits + any unit incl.
         // shortcuts ("every 40m", "every 2 hrs", "every 30 sec"), or a bare
         // unit ("every hour"). Single-letter units only after digits.
-        pattern: #"every\s+(?:(?<qty>[a-z]+(?:[\s-][a-z]+)*)\s+(?<unit>seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?)|(?<qty2>\d+(?:\.\d+)?)\s*(?<unit2>seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|wks?|w)|(?<unit3>seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?))\b"#,
+        // Unit words tolerate typos past their first letters ("minuts",
+        // "mintue", "houres").
+        pattern: #"every\s+(?:(?<qty>[a-z]+(?:[\s-][a-z]+)*)\s+(?<unit>"# + unitWord + #")|(?<qty2>\d+(?:\.\d+)?)\s*(?<unit2>"# + unitWord + #"|s|m|h|d|w)|(?<unit3>"# + unitWord + #"))\b"#,
         options: [.caseInsensitive]
     )
+
+    private static let unitWord = #"(?:sec[a-z]*|min[a-z]*|hou?r[a-z]*|hr[a-z]*|day[a-z]*|week[a-z]*|wk[a-z]*)"#
 
     private static let clockAtRegex = try! NSRegularExpression(
         pattern: #"\bat\s+(?<hour>\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?:\s*:\s*(?<minute>\d{2}))?\s*(?<ampm>a\.?m\.?|p\.?m\.?|o'clock)?"#,

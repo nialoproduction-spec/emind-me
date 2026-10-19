@@ -82,20 +82,23 @@ struct LiveReminderView: View {
         }
     }
 
+    /// Done, the snooze lengths as their own buttons (5m / 10m / 30m by
+    /// default, one tap), and Skip.
     private var mainRow: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             actionButton("Done", icon: "checkmark.circle.fill", tint: theme.accent, action: done)
                 .keyboardShortcut(.return, modifiers: [])
                 .help("Done — \(GlobalHotkeys.label(for: .done))")
-            actionButton("Snooze", icon: "moon.zzz.fill", tint: theme.text.opacity(0.85)) {
-                if presets.count > 1 {
-                    withAnimation(.easeOut(duration: 0.15)) { choosingSnooze = true }
+            ForEach(Array(presets.prefix(3).enumerated()), id: \.element) { index, minutes in
+                let button = actionButton(SnoozeSettings.label(minutes), icon: "moon.zzz.fill",
+                                          tint: theme.text.opacity(0.85)) { snooze(minutes: minutes) }
+                    .help("Snooze \(SnoozeSettings.label(minutes))")
+                if index == 0 {
+                    button.keyboardShortcut("s", modifiers: [])
                 } else {
-                    snooze(minutes: presets.first)
+                    button
                 }
             }
-            .keyboardShortcut("s", modifiers: [])
-            .help("Snooze — \(GlobalHotkeys.label(for: .snooze)) snoozes \(SnoozeSettings.label(snoozeSettings.value.defaultMinutes))")
             actionButton("Skip", icon: "arrow.uturn.forward.circle", tint: theme.text.opacity(0.6), action: skip)
                 .keyboardShortcut("k", modifiers: [])
                 .help("Skip — \(GlobalHotkeys.label(for: .skip))")

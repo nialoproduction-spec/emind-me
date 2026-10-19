@@ -56,6 +56,8 @@ final class ReminderScheduler: ObservableObject {
     @Published var showEndOfDaySummary = false
     /// Flips true when it's time to show the weekly summary.
     @Published var showWeeklySummary = false
+    /// Flips true at the goal check-in time: the panel asks Done / Not today.
+    @Published var showGoalCheckIn = false
     /// A Done / Snooze / Skip pressed on the keyboard; the reminder card
     /// picks it up so it can play its reaction first.
     @Published private(set) var shortcutRequest: ShortcutRequest?
@@ -211,7 +213,7 @@ final class ReminderScheduler: ObservableObject {
             }
         }
 
-        checkGoalNudge(now: now, items: items, held: suppressed || away)
+        checkGoalNudge(now: now, items: items, occurrences: allOccurrences, held: suppressed || away)
         checkEndOfDay(now: now)
         checkWeeklySummary(now: now)
         try? modelContext.save()
@@ -271,21 +273,35 @@ final class ReminderScheduler: ObservableObject {
         return now >= time
     }
 
-    /// Once a day at the check-in time (8 PM by default), a popup lists the
-    /// goals still open. Nothing open: nothing shown. If nobody's looking
-    /// (away / full screen) it waits and shows later, still today.
-    private func checkGoalNudge(now: Date, items: [Item], held: Bool) {
-        let open = items.filter { $0.kind == .goal && !$0.isAchieved }
-        guard !open.isEmpty, !held,
-              Self.shouldShowGoalNudge(settings: goalNudgeSettings.value, now: now) else { return }
+    /// Once a day at the check-in time (8 PM by default, set in Settings),
+    /// the panel opens with each goal not answered yet today: Done or Not
+    /// today. Nothing waiting: nothing shown. If nobody's looking (away /
+    /// full screen) it waits and shows later, still today.
+    private func checkGoalNudge(now: Date, items: [Item], occurrences: [Occurrence], held: Bool) {
+        guard !showGoalCheckIn, !held,
+              Self.shouldShowGoalNudge(settings: goalNudgeSettings.value, now: now),
+              !GoalCheckIn.unanswered(goals: items, occurrences: occurrences, now: now).isEmpty else { return }
         goalNudgeSettings.value.lastShownDayKey = Occurrence.dayKey(for: now)
-        let content: NoticeContent
-        if open.count == 1, let goal = open.first {
-            content = NoticeContent(title: goal.title, detail: "Goal · not done yet", face: .sheepish, duration: 10)
-        } else {
-            content = NoticeContent(title: "\(open.count) goals still open", detail: "Goal check-in", face: .sheepish, duration: 10)
+        showGoalCheckIn = true
+        presenter.presentOverlay()
+    }
+
+    /// Done / Not today from the check-in. Closes it once every goal is answered.
+    func answerGoal(_ goal: Item, done: Bool) {
+        guard let modelContext else { return }
+        let now = clock()
+        GoalCheckIn.answer(goal, done: done, now: now, in: modelContext)
+        let items = (try? modelContext.fetch(FetchDescriptor<Item>())) ?? []
+        let occurrences = (try? modelContext.fetch(FetchDescriptor<Occurrence>())) ?? []
+        if showGoalCheckIn, GoalCheckIn.unanswered(goals: items, occurrences: occurrences, now: now).isEmpty {
+            dismissGoalCheckIn()
         }
-        showNotice(content)
+    }
+
+    func dismissGoalCheckIn() {
+        guard showGoalCheckIn else { return }
+        showGoalCheckIn = false
+        presenter.dismissOverlay()
     }
 
     /// `held`: the person is away from the Mac — wait for them, without
@@ -475,7 +491,7 @@ final class ReminderScheduler: ObservableObject {
 
     private func checkWeeklySummary(now: Date) {
         // One overlay at a time: wait for the end-of-day summary to be closed.
-        guard !showWeeklySummary, !showEndOfDaySummary else { return }
+        guard !showWeeklySummary, !showEndOfDaySummary, !showGoalCheckIn else { return }
         guard Self.shouldShowWeeklySummary(settings: weeklySettings.value, now: now) else { return }
         weeklySettings.value.lastShownWeekKey = Insights.weekKey(for: now)
         showWeeklySummary = true

@@ -38,6 +38,7 @@ Sources/RemindMe/
     ReminderScheduler.swift      THE core loop: 20 s tick, firing, nagging, snooze, pause-resume,
                                  away hold, end-of-day + weekly summary triggers, shortcuts
     ItemActions.swift            pause / resume / edit / apply suggestion; OccurrenceActions (checklist)
+    GoalCheckIn.swift            goal answers per day (Done / Not today), unanswered goals
     ItemDeletion.swift           the ONLY way to delete an Item (removes its occurrences too)
     StoreRepair.swift            raw SQLite clean-up of orphaned rows, runs before SwiftData opens
     Insights.swift               history, streaks, weekly summary, smart suggestions (pure functions)
@@ -115,7 +116,15 @@ Design/, scripts/trace_faces.py  source art + the tracer that generated Faces/Fa
 ## Types (v2)
 - Reminder = `Item.style == .justRemind`: popup only, no Occurrence, no Done/Snooze/Skip, no notification.
 - Habit = `.habit` (nil `styleRaw` counts as habit): the full card and notification.
-- Goal = `kind == .goal`: no schedule; one 8 PM popup per day while any is open (`GoalNudgeSettings`).
+- Goal = `kind == .goal`: no schedule. Answered once a day, Done or Not today, at the check-in time
+  (`GoalNudgeSettings`, 8 PM default, editable in Settings → Smart) via `GoalCheckInView` in the panel.
+  Answers are stored as done / skipped `Occurrence`s (`Services/GoalCheckIn.swift`), never pending,
+  and are kept out of the Today checklist. `isAchieved` = finished for good (stops the asking).
+- The type is never picked by hand: a time in the text → Reminder, none → Goal. The Habit button
+  beside the send arrow (⌘↩) saves it as a habit. "remind me to" and typos of "every" / units are
+  cleaned up by the parser first.
+- Rows show "N total" and "N days in a row". A habit card offers the snooze lengths as buttons
+  (5m / 10m / 30m by default).
 - All sounds are off. Don't add any.
 - Typing shows a live preview (with the type chooser) above the field; Enter saves at once.
 - The break timer is listed in its own "Break timer" section (`BreakTimerSection`): `stop()` greys it

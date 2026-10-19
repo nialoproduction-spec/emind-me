@@ -370,7 +370,7 @@ final class ReminderPanelController: ObservableObject {
             }
             return
         }
-        if scheduler.showEndOfDaySummary || scheduler.showWeeklySummary {
+        if scheduler.showGoalCheckIn || scheduler.showEndOfDaySummary || scheduler.showWeeklySummary {
             isExpanded = true
             show()
             resize(to: Self.expandedSize, animated: true)
