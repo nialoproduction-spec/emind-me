@@ -91,8 +91,10 @@ final class ItemActionsTests: XCTestCase {
         XCTAssertEqual(item.title, "Water")
 
         edit = ItemActions.Edit(of: item)
-        edit.intervalSeconds = 10
-        XCTAssertFalse(edit.isValid, "less than a minute apart")
+        edit.intervalSeconds = 5
+        XCTAssertFalse(edit.isValid, "under 10 seconds apart")
+        edit.intervalSeconds = 30
+        XCTAssertTrue(edit.isValid, "every 30 seconds is allowed")
     }
 
     func testEmptyCategoryClearsIt() {

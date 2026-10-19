@@ -2,10 +2,52 @@ import Foundation
 import AppKit
 import Combine
 
-/// "Work for N minutes, then rest for M minutes", repeating until stopped.
+/// "Work for N, then rest for M", repeating until stopped. Lengths are in
+/// seconds so "work 30 sec, rest 10 sec" works; saved cycles from before
+/// (in minutes) still load.
 struct BreakCycleConfig: Codable, Equatable {
-    var workMinutes: Int
-    var breakMinutes: Int
+    var workSeconds: Int
+    var breakSeconds: Int
+
+    init(workSeconds: Int, breakSeconds: Int) {
+        self.workSeconds = max(1, workSeconds)
+        self.breakSeconds = max(1, breakSeconds)
+    }
+
+    init(workMinutes: Int, breakMinutes: Int) {
+        self.init(workSeconds: workMinutes * 60, breakSeconds: breakMinutes * 60)
+    }
+
+    private enum CodingKeys: String, CodingKey { case workSeconds, breakSeconds, workMinutes, breakMinutes }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let work = try c.decodeIfPresent(Int.self, forKey: .workSeconds),
+           let rest = try c.decodeIfPresent(Int.self, forKey: .breakSeconds) {
+            self.init(workSeconds: work, breakSeconds: rest)
+        } else {
+            self.init(workMinutes: try c.decode(Int.self, forKey: .workMinutes),
+                      breakMinutes: try c.decode(Int.self, forKey: .breakMinutes))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(workSeconds, forKey: .workSeconds)
+        try c.encode(breakSeconds, forKey: .breakSeconds)
+    }
+
+    /// "Work 40 min · Rest 10 min"
+    var title: String { "Work \(Self.short(workSeconds)) · Rest \(Self.short(breakSeconds))" }
+
+    /// "40 min", "1 hr", "30 sec", "1 hr 30 min".
+    static func short(_ seconds: Int) -> String {
+        if seconds < 60 { return "\(seconds) sec" }
+        if seconds % 3600 == 0 { return "\(seconds / 3600) hr" }
+        if seconds > 3600 { return "\(seconds / 3600) hr \((seconds % 3600) / 60) min" }
+        if seconds % 60 == 0 { return "\(seconds / 60) min" }
+        return "\(seconds / 60) min \(seconds % 60) sec"
+    }
 }
 
 /// Where a break cycle is right now. Pure data and date maths, no timers:
@@ -30,11 +72,11 @@ struct BreakCycleState: Codable, Equatable {
     static func started(_ config: BreakCycleConfig, at now: Date) -> BreakCycleState {
         BreakCycleState(
             config: config, phase: .work,
-            phaseEnd: now.addingTimeInterval(TimeInterval(config.workMinutes * 60))
+            phaseEnd: now.addingTimeInterval(TimeInterval(config.workSeconds))
         )
     }
 
-    var phaseMinutes: Int { phase == .work ? config.workMinutes : config.breakMinutes }
+    var phaseSeconds: Int { phase == .work ? config.workSeconds : config.breakSeconds }
 
     /// Moves to the next phase if the current one is over. Returns what
     /// happened, or nil if nothing changed. At most one step per call, and the
@@ -46,11 +88,11 @@ struct BreakCycleState: Codable, Equatable {
         switch phase {
         case .work:
             phase = .onBreak
-            phaseEnd = now.addingTimeInterval(TimeInterval(config.breakMinutes * 60))
+            phaseEnd = now.addingTimeInterval(TimeInterval(config.breakSeconds))
             return .breakStarted
         case .onBreak:
             phase = .work
-            phaseEnd = now.addingTimeInterval(TimeInterval(config.workMinutes * 60))
+            phaseEnd = now.addingTimeInterval(TimeInterval(config.workSeconds))
             return .breakEnded
         }
     }
@@ -74,7 +116,7 @@ struct BreakCycleState: Codable, Equatable {
             return .lastSeconds
         }
         if phase == .work,
-           TimeInterval(phaseMinutes * 60) > Self.lastTenThreshold + 60,
+           TimeInterval(phaseSeconds) > Self.lastTenThreshold + 60,
            left > Self.lastSecondsThreshold, left <= Self.lastTenThreshold,
            !shown.contains(.lastTen) {
             return .lastTen
@@ -85,6 +127,9 @@ struct BreakCycleState: Codable, Equatable {
     /// "9:42" — rounds up, so it reads 0:01 until the moment it ends.
     static func clockString(_ seconds: TimeInterval) -> String {
         let total = Int(max(0, seconds).rounded(.up))
+        if total >= 3600 {
+            return String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
+        }
         return String(format: "%d:%02d", total / 60, total % 60)
     }
 
@@ -111,6 +156,10 @@ final class BreakCycleManager: ObservableObject {
     static let shared = BreakCycleManager()
 
     @Published private(set) var state: BreakCycleState?
+    /// The saved timer, running or not. It stays (greyed out in the list)
+    /// when turned off, so it can be turned back on with one click; only
+    /// `remove()` forgets it.
+    @Published private(set) var config: BreakCycleConfig?
     /// Empty when no cycle is running.
     @Published private(set) var menuBarTitle = ""
 
@@ -118,6 +167,7 @@ final class BreakCycleManager: ObservableObject {
 
     private let defaults: UserDefaults
     private let key = "breakCycle.v1"
+    private let configKey = "breakCycle.config.v1"
     private let clock: @MainActor () -> Date
     /// Show a popup; nil puts the current one away.
     private let notice: @MainActor (NoticeContent?) -> Void
@@ -142,9 +192,14 @@ final class BreakCycleManager: ObservableObject {
                 NoticePillController.shared.hide()
             }
         }
+        if let data = defaults.data(forKey: configKey),
+           let saved = try? JSONDecoder().decode(BreakCycleConfig.self, from: data) {
+            config = saved
+        }
         if let data = defaults.data(forKey: key),
            let saved = try? JSONDecoder().decode(BreakCycleState.self, from: data) {
             state = saved
+            config = config ?? saved.config
             menuBarTitle = saved.menuBarTitle(at: self.clock())
         }
     }
@@ -177,12 +232,28 @@ final class BreakCycleManager: ObservableObject {
         let now = clock()
         let fresh = BreakCycleState.started(config, at: now)
         state = fresh
+        self.config = config
         persist()
+        if let data = try? JSONEncoder().encode(config) { defaults.set(data, forKey: configKey) }
         menuBarTitle = fresh.menuBarTitle(at: now)
         if timerEnabled { startTimer() }
         notice(Self.workStartNotice(for: fresh, afterBreak: false))
     }
 
+    /// Turns the saved timer back on, from the start of a work stretch.
+    func resume() {
+        guard let config else { return }
+        startCycle(config)
+    }
+
+    /// Turns it off and forgets it: gone from the list too.
+    func remove() {
+        stop()
+        config = nil
+        defaults.removeObject(forKey: configKey)
+    }
+
+    /// Turns it off; it stays in the list, greyed out.
     func stop() {
         state = nil
         sleepStart = nil
@@ -221,7 +292,7 @@ final class BreakCycleManager: ObservableObject {
     // MARK: - Popup wording
 
     static func workStartNotice(for state: BreakCycleState, afterBreak: Bool) -> NoticeContent {
-        let left = Item.durationString(TimeInterval(state.config.workMinutes * 60))
+        let left = Item.durationString(TimeInterval(state.config.workSeconds))
         return NoticeContent(
             title: afterBreak ? "Break over · \(left) to go" : "\(left) to go",
             countdownTo: state.phaseEnd,
@@ -230,10 +301,11 @@ final class BreakCycleManager: ObservableObject {
     }
 
     static func breakStartNotice(for state: BreakCycleState) -> NoticeContent {
-        let rest = Item.durationString(TimeInterval(state.config.breakMinutes * 60))
+        let rest = Item.durationString(TimeInterval(state.config.breakSeconds))
         return NoticeContent(
             title: "Time for a break",
             detail: "Rest for \(rest).",
+            countdownTo: state.phaseEnd,
             face: .sheepish,
             duration: 8
         )

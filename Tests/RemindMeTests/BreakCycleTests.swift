@@ -11,7 +11,7 @@ final class BreakCycleParserTests: XCTestCase {
         XCTAssertEqual(p.breakCycle, BreakCycleConfig(workMinutes: 40, breakMinutes: 10))
         XCTAssertEqual(p.kindLabel, "Break timer")
         XCTAssertEqual(p.title, "Rest every 40 min")
-        XCTAssertEqual(p.detailLine, "10 min break · repeats until you stop it")
+        XCTAssertEqual(p.detailLine, "10 min break · repeats until you turn it off")
     }
 
     func testWordNumbersDoNotLeakIntoEachOther() {
@@ -34,6 +34,44 @@ final class BreakCycleParserTests: XCTestCase {
         XCTAssertNil(p.breakCycle)
         XCTAssertEqual(p.kind, .repeatingRoutine)
         XCTAssertEqual(p.kindLabel, "Reminder")
+    }
+
+    func testWorkAndRestBothNamed() {
+        let p = ItemParser.parse("work 1 minute and rest 1 minute")
+        XCTAssertEqual(p.breakCycle, BreakCycleConfig(workMinutes: 1, breakMinutes: 1))
+        XCTAssertEqual(p.title, "Work 1 min · Rest 1 min")
+        XCTAssertEqual(p.kindLabel, "Break timer")
+    }
+
+    func testWorkEveryBreakEvery() {
+        let p = ItemParser.parse("work every 1 minute break every 10 minute")
+        XCTAssertEqual(p.breakCycle, BreakCycleConfig(workMinutes: 1, breakMinutes: 10),
+                       "work is the first number, the break the second")
+    }
+
+    func testWorkRestOtherOrders() {
+        XCTAssertEqual(ItemParser.parse("40 min work 10 min rest").breakCycle,
+                       BreakCycleConfig(workMinutes: 40, breakMinutes: 10))
+        XCTAssertEqual(ItemParser.parse("work 25 min, 5 min break").breakCycle,
+                       BreakCycleConfig(workMinutes: 25, breakMinutes: 5))
+        XCTAssertEqual(ItemParser.parse("work for forty minutes then rest for ten minutes").breakCycle,
+                       BreakCycleConfig(workMinutes: 40, breakMinutes: 10))
+        XCTAssertEqual(ItemParser.parse("work 1 hr rest 15 min #work").category, "Work")
+    }
+
+    func testShortcutUnitsInBreakTimers() {
+        XCTAssertEqual(ItemParser.parse("work 2h rest 10m").breakCycle,
+                       BreakCycleConfig(workMinutes: 120, breakMinutes: 10))
+        XCTAssertEqual(ItemParser.parse("work 30 sec rest 10 sec").breakCycle,
+                       BreakCycleConfig(workSeconds: 30, breakSeconds: 10))
+        XCTAssertEqual(ItemParser.parse("work 45 mins rest 5 secs").breakCycle,
+                       BreakCycleConfig(workSeconds: 45 * 60, breakSeconds: 5))
+    }
+
+    func testWorkWithoutRestIsNotABreakTimer() {
+        let p = ItemParser.parse("work on the edit every 2 hours")
+        XCTAssertNil(p.breakCycle)
+        XCTAssertEqual(p.intervalSeconds, 7200)
     }
 
     func testBreakWithoutAnIntervalIsNotABreakTimer() {
@@ -209,6 +247,42 @@ final class BreakCycleManagerTests: XCTestCase {
         manager.didWake()
         XCTAssertEqual(manager.menuBarTitle, "30:00", "sleep doesn't count as work")
         XCTAssertEqual(manager.state?.phase, .work)
+    }
+
+    func testTurnedOffTimerStaysSavedAndTurnsBackOn() throws {
+        let defaults = UserDefaults(suiteName: "BreakCycleTests-\(UUID().uuidString)")!
+        let manager = makeManager(defaults: defaults)
+        let config = BreakCycleConfig(workMinutes: 40, breakMinutes: 10)
+        manager.startCycle(config)
+        manager.stop()
+        XCTAssertEqual(manager.config, config, "still listed, greyed out")
+        XCTAssertEqual(makeManager(defaults: defaults).config, config, "and after a restart")
+
+        now.addTimeInterval(3600)
+        manager.resume()
+        XCTAssertTrue(manager.isRunning)
+        XCTAssertEqual(manager.menuBarTitle, "40:00", "starts from the top")
+
+        manager.remove()
+        XCTAssertNil(manager.config)
+        XCTAssertFalse(manager.isRunning)
+        XCTAssertNil(makeManager(defaults: defaults).config)
+    }
+
+    func testOldMinuteBasedSaveStillLoads() throws {
+        let old = #"{"workMinutes":40,"breakMinutes":10}"#.data(using: .utf8)!
+        let config = try JSONDecoder().decode(BreakCycleConfig.self, from: old)
+        XCTAssertEqual(config, BreakCycleConfig(workSeconds: 2400, breakSeconds: 600))
+    }
+
+    func testBreakPopupCountsDown() throws {
+        let manager = makeManager()
+        manager.startCycle(BreakCycleConfig(workMinutes: 1, breakMinutes: 1))
+        now.addTimeInterval(60)
+        manager.tick()
+        let popup = try XCTUnwrap(popups.last ?? nil)
+        XCTAssertEqual(popup.title, "Time for a break")
+        XCTAssertEqual(popup.countdownTo, now.addingTimeInterval(60))
     }
 
     func testStopClearsTheMenuBarThePopupAndTheSavedCycle() {

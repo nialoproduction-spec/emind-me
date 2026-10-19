@@ -9,6 +9,9 @@ import SwiftData
 /// service; tests pass no-ops (notifications need an app bundle).
 @MainActor
 enum ItemActions {
+    /// Shortest gap a repeating reminder can have ("every 30 sec" is fine).
+    nonisolated static let minimumInterval: TimeInterval = 10
+
 
     // MARK: - Pause
 
@@ -109,7 +112,7 @@ enum ItemActions {
         var isValid: Bool {
             guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
             switch kind {
-            case .repeatingRoutine: return (intervalSeconds ?? 0) >= 60
+            case .repeatingRoutine: return (intervalSeconds ?? 0) >= ItemActions.minimumInterval
             case .scheduledRoutine: return hour != nil && minute != nil
             case .goal: return true
             }

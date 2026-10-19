@@ -32,7 +32,7 @@ struct ParsedItem {
     /// Schedule description for the confirmation banner (title shown separately).
     var detailLine: String {
         if let breakCycle {
-            return "\(breakCycle.breakMinutes) min break · repeats until you stop it"
+            return "\(BreakCycleConfig.short(breakCycle.breakSeconds)) break · repeats until you turn it off"
         }
         if type == .goal, kind != .goal { return "8 PM check-in" }
         switch kind {
@@ -67,17 +67,26 @@ enum ItemParser {
         // Hashtags first: "#work" anywhere sets the category and is taken out
         // of the text before anything else reads it.
         let (withoutTags, category) = extractCategory(from: raw)
+        // "work 25 min and rest 5 min", "work every 1 minute break every 10
+        // minute", "40 min work 10 min rest": both lengths named outright.
+        if let (work, rest) = workAndRest(in: withoutTags) {
+            let config = BreakCycleConfig(workSeconds: Int(work.rounded()), breakSeconds: Int(rest.rounded()))
+            var cycle = ParsedItem(kind: .repeatingRoutine, title: config.title, intervalSeconds: work,
+                                   hour: nil, minute: nil, weekdays: [], targetDate: nil)
+            cycle.category = category
+            cycle.breakCycle = config
+            return cycle
+        }
         // A break phrase ("and take a 10 min break") is cut out first, so its
         // number can't be mistaken for part of the "every 40 min" interval.
         if let rest = breakPhrase(in: withoutTags) {
             let schedule = (withoutTags as NSString).replacingCharacters(in: rest.range, with: " ")
             var cycle = parseSchedule(schedule)
             if cycle.kind == .repeatingRoutine, let interval = cycle.intervalSeconds {
-                let work = max(1, Int((interval / 60).rounded()))
-                let breakMinutes = max(1, Int((rest.seconds / 60).rounded()))
+                let config = BreakCycleConfig(workSeconds: Int(interval.rounded()), breakSeconds: Int(rest.seconds.rounded()))
                 cycle.category = category
-                cycle.breakCycle = BreakCycleConfig(workMinutes: work, breakMinutes: breakMinutes)
-                cycle.title = "Rest every \(work) min"
+                cycle.breakCycle = config
+                cycle.title = "Rest every \(BreakCycleConfig.short(config.workSeconds))"
                 return cycle
             }
         }
@@ -100,6 +109,58 @@ enum ItemParser {
         return nil
     }
 
+    /// Work and rest lengths (seconds) when the text names both with the
+    /// words "work" and "rest"/"break". The work part is cut out before the
+    /// rest part is looked for, so one number is never read twice.
+    static func workAndRest(in text: String) -> (work: Double, rest: Double)? {
+        let ns = text as NSString
+        let full = NSRange(location: 0, length: ns.length)
+        // "40 min work 10 min rest" must read 40 as the work, so the
+        // number-first form is tried first.
+        for regex in [workAfterRegex, workBeforeRegex] {
+            guard let match = regex.firstMatch(in: text, range: full),
+                  let work = seconds(in: ns, match) else { continue }
+            let remainder = ns.replacingCharacters(in: match.range, with: " ")
+            let rns = remainder as NSString
+            let rfull = NSRange(location: 0, length: rns.length)
+            for restRegex in [restBeforeRegex, breakAfterRegex] {
+                if let restMatch = restRegex.firstMatch(in: remainder, range: rfull),
+                   let rest = seconds(in: rns, restMatch) {
+                    return (work, rest)
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func seconds(in ns: NSString, _ match: NSTextCheckingResult) -> Double? {
+        guard let quantity = parseQuantity(ns.substring(with: match.range(withName: "qty"))), quantity > 0 else { return nil }
+        return quantity * unitSeconds(ns.substring(with: match.range(withName: "unit")).lowercased())
+    }
+
+    /// Units, long forms first so "min" never stops short of "minutes";
+    /// h / m / s only as whole words ("40m", "2 h", "30s").
+    private static let durationUnit = #"(?:hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)\b"#
+
+    /// "work 40 min", "work for 25 minutes", "work every 1 minute", "focus 2h".
+    private static let workBeforeRegex = try! NSRegularExpression(
+        pattern: #"\b(?:work|working|focus|study)\s+(?:for\s+|every\s+)?(?<qty>"# + breakQuantity + #")\s*-?\s*(?<unit>"# + durationUnit + #")"#,
+        options: [.caseInsensitive]
+    )
+
+    /// "40 min work", "25-minute focus", "1 hr of work".
+    private static let workAfterRegex = try! NSRegularExpression(
+        // Not when the number belongs to a rest ("rest 5 min work 25 min").
+        pattern: #"(?<!rest\s)(?<!break\s)(?<!relax\s)\b(?<qty>"# + breakQuantity + #")\s*-?\s*(?<unit>"# + durationUnit + #")\s+(?:of\s+)?(?:work|focus|study)\b"#,
+        options: [.caseInsensitive]
+    )
+
+    /// "rest 1 minute", "break every 10 minute", "rest for 5 min", "relax 30 sec".
+    private static let restBeforeRegex = try! NSRegularExpression(
+        pattern: #"\b(?:rest|break|relax|pause)\s+(?:for\s+|every\s+|of\s+|is\s+)?(?<qty>"# + breakQuantity + #")\s*-?\s*(?<unit>"# + durationUnit + #")"#,
+        options: [.caseInsensitive]
+    )
+
     /// A number as digits or words ("10", "ten", "forty five") — and nothing
     /// else, so surrounding words can't leak into the amount.
     private static let breakQuantity: String = {
@@ -109,13 +170,13 @@ enum ItemParser {
 
     /// "10 min break", "ten-minute break".
     private static let breakAfterRegex = try! NSRegularExpression(
-        pattern: #"\b(?<qty>"# + breakQuantity + #")\s*-?\s*(?<unit>minutes?|mins?|hours?|hrs?)\s+break\b"#,
+        pattern: #"\b(?<qty>"# + breakQuantity + #")\s*-?\s*(?<unit>"# + durationUnit + #")\s+(?:of\s+)?(?:break|rest)\b"#,
         options: [.caseInsensitive]
     )
 
     /// "break of 10 minutes", "break for ten min".
     private static let breakBeforeRegex = try! NSRegularExpression(
-        pattern: #"\bbreak\s+(?:of|for|is|lasting)?\s*(?<qty>"# + breakQuantity + #")\s*(?<unit>minutes?|mins?|hours?|hrs?)\b"#,
+        pattern: #"\bbreak\s+(?:of|for|is|lasting)?\s*(?<qty>"# + breakQuantity + #")\s*(?<unit>"# + durationUnit + #")"#,
         options: [.caseInsensitive]
     )
 
@@ -151,11 +212,16 @@ enum ItemParser {
         // an interval — that's a daily/weekly *schedule* signal, handled below.
         var intervalSeconds: Double?
         if let match = intervalRegex.firstMatch(in: trimmed, range: fullRange) {
-            let unitRange = match.range(withName: "unit")
-            let qtyRange = match.range(withName: "qty")
-            let unit = ns.substring(with: unitRange).lowercased()
-            let qtyPhrase = qtyRange.location != NSNotFound ? ns.substring(with: qtyRange) : nil
-            let isDayOrWeek = unit.hasPrefix("day") || unit.hasPrefix("week")
+            func group(_ names: [String]) -> String? {
+                for name in names {
+                    let range = match.range(withName: name)
+                    if range.location != NSNotFound { return ns.substring(with: range) }
+                }
+                return nil
+            }
+            let unit = (group(["unit", "unit2", "unit3"]) ?? "").lowercased()
+            let qtyPhrase = group(["qty", "qty2"])
+            let isDayOrWeek = unit.hasPrefix("d") || unit.hasPrefix("w")
             if !(isDayOrWeek && qtyPhrase == nil) {
                 let quantity = qtyPhrase.flatMap(parseQuantity) ?? 1
                 if quantity > 0 {
@@ -291,11 +357,11 @@ enum ItemParser {
     // MARK: - Quantity / unit helpers
 
     static func unitSeconds(_ unit: String) -> Double {
-        if unit.hasPrefix("sec") { return 1 }
-        if unit.hasPrefix("min") { return 60 }
-        if unit.hasPrefix("hour") || unit.hasPrefix("hr") { return 3600 }
-        if unit.hasPrefix("day") { return 86400 }
-        if unit.hasPrefix("week") { return 604800 }
+        if unit.hasPrefix("s") { return 1 }
+        if unit.hasPrefix("m") { return 60 }
+        if unit.hasPrefix("h") { return 3600 }
+        if unit.hasPrefix("d") { return 86400 }
+        if unit.hasPrefix("w") { return 604800 }
         return 60
     }
 
@@ -357,7 +423,10 @@ enum ItemParser {
     // MARK: - Regexes
 
     private static let intervalRegex = try! NSRegularExpression(
-        pattern: #"every\s+(?:(?<qty>[a-z]+(?:[\s-][a-z]+)*|\d+(?:\.\d+)?)\s+)?(?<unit>seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?)\b"#,
+        // Words + full unit ("every forty minutes"), digits + any unit incl.
+        // shortcuts ("every 40m", "every 2 hrs", "every 30 sec"), or a bare
+        // unit ("every hour"). Single-letter units only after digits.
+        pattern: #"every\s+(?:(?<qty>[a-z]+(?:[\s-][a-z]+)*)\s+(?<unit>seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?)|(?<qty2>\d+(?:\.\d+)?)\s*(?<unit2>seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|wks?|w)|(?<unit3>seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?))\b"#,
         options: [.caseInsensitive]
     )
 

@@ -11,7 +11,7 @@ struct ReminderRowView: View {
     var streak: Int = 0
     /// Goal: achieved on/off. Paused routine: resume.
     let onToggle: () -> Void
-    /// Running routine: pause it for this long.
+    /// Kept for callers; pausing for a set time is in the right-click menu.
     var onPause: (ItemActions.PauseLength) -> Void = { _ in }
 
     private static let timeFormatter: DateFormatter = {
@@ -72,36 +72,24 @@ struct ReminderRowView: View {
         .contentShape(Rectangle())
     }
 
-    @ViewBuilder
+    /// One click turns it off (grey) or back on (blue). Longer pauses are
+    /// in the right-click menu.
     private var toggleControl: some View {
-        if item.kind != .goal, item.isActive {
-            Menu {
-                Section("Pause") {
-                    ForEach(ItemActions.PauseLength.allCases) { length in
-                        Button(length.label) { onPause(length) }
-                    }
-                }
-            } label: {
-                Image(systemName: "bolt.circle.fill")
-                    .foregroundStyle(theme.accent)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Pause…")
-        } else {
-            Button(action: onToggle) {
-                Image(systemName: toggleIcon)
-                    .foregroundStyle(toggleOn ? theme.accent : theme.text.opacity(0.4))
-            }
-            .buttonStyle(.plain)
-            .help(toggleHelp)
+        Button(action: onToggle) {
+            Image(systemName: toggleIcon)
+                .font(.system(size: theme.fontSize + 3))
+                .foregroundStyle(toggleOn ? ReminderRowView.onColor : theme.text.opacity(0.3))
         }
+        .buttonStyle(.plain)
+        .help(toggleHelp)
     }
+
+    /// The "on" colour for every toggle in the list.
+    static let onColor = Color(red: 0.25, green: 0.56, blue: 1.0)
 
     private var pausedLine: String? {
         guard item.kind != .goal, !item.isActive else { return nil }
-        guard let until = item.pausedUntil else { return "Paused · \(item.scheduleSummary)" }
+        guard let until = item.pausedUntil else { return "Off · \(item.scheduleSummary)" }
         let calendar = Calendar.current
         let time = Self.timeFormatter.string(from: until)
         if calendar.isDateInToday(until) { return "Paused until \(time)" }
@@ -122,14 +110,14 @@ struct ReminderRowView: View {
         case .goal:
             return item.isAchieved ? "checkmark.circle.fill" : "circle"
         case .repeatingRoutine, .scheduledRoutine:
-            return item.isActive ? "bolt.circle.fill" : "pause.circle"
+            return "bolt.circle.fill"
         }
     }
 
     private var toggleHelp: String {
         switch item.kind {
         case .goal: return item.isAchieved ? "Mark not done" : "Mark done"
-        case .repeatingRoutine, .scheduledRoutine: return item.isActive ? "Pause" : "Resume"
+        case .repeatingRoutine, .scheduledRoutine: return item.isActive ? "Turn off" : "Turn on"
         }
     }
 

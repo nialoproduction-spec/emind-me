@@ -20,10 +20,11 @@ struct EditItemView: View {
     }
 
     private enum IntervalUnit: Double, CaseIterable, Identifiable {
-        case minutes = 60, hours = 3600, days = 86400
+        case seconds = 1, minutes = 60, hours = 3600, days = 86400
         var id: Double { rawValue }
         var label: String {
             switch self {
+            case .seconds: return "seconds"
             case .minutes: return "minutes"
             case .hours: return "hours"
             case .days: return "days"
@@ -57,7 +58,8 @@ struct EditItemView: View {
         }
         let seconds = item.intervalSeconds ?? 3600
         let unit: IntervalUnit = seconds.truncatingRemainder(dividingBy: 86400) == 0 ? .days
-            : seconds.truncatingRemainder(dividingBy: 3600) == 0 ? .hours : .minutes
+            : seconds.truncatingRemainder(dividingBy: 3600) == 0 ? .hours
+            : seconds.truncatingRemainder(dividingBy: 60) == 0 ? .minutes : .seconds
         _intervalUnit = State(initialValue: unit)
         _intervalValue = State(initialValue: max(1, Int((seconds / unit.rawValue).rounded())))
         var comps = DateComponents()
@@ -205,8 +207,8 @@ struct EditItemView: View {
                     .fixedSize()
                 }
             }
-            if Double(intervalValue) * intervalUnit.rawValue < 60 {
-                Text("At least a minute apart.")
+            if Double(intervalValue) * intervalUnit.rawValue < ItemActions.minimumInterval {
+                Text("At least 10 seconds apart.")
                     .font(.caption)
                     .foregroundStyle(.orange)
             }

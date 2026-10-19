@@ -37,17 +37,18 @@ struct NoticePillView: View {
                 .foregroundStyle(.white)
                 .lineLimit(1)
             Spacer(minLength: 12)
-            if let end = content.countdownTo {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text(BreakCycleState.clockString(end.timeIntervalSince(context.date)))
-                        .font(.system(size: 14, weight: .medium).monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.75))
-                }
-            } else if let detail = content.detail {
+            if let detail = content.detail {
                 Text(detail)
                     .font(.system(size: 13))
                     .foregroundStyle(.white.opacity(0.75))
                     .lineLimit(1)
+            }
+            if let end = content.countdownTo {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Text(BreakCycleState.clockString(end.timeIntervalSince(context.date)))
+                        .font(.system(size: 14, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(.white.opacity(content.detail == nil ? 0.8 : 0.55))
+                }
             }
         }
         .padding(.horizontal, 16)
@@ -72,10 +73,7 @@ struct NoticePillView: View {
 final class NoticePillController {
     static let shared = NoticePillController()
 
-    static let size = CGSize(width: 340, height: 46)
-
-    /// The menu bar icon's frame, so the popup lines up under it.
-    var statusItemFrame: (() -> CGRect?)?
+    static let size = CGSize(width: 380, height: 46)
 
     private var panel: ReminderPanel?
     private var hosting: NSHostingView<AnyView>?
@@ -153,18 +151,20 @@ final class NoticePillController {
         }
     }
 
-    /// Top right, just under the menu bar, with its right edge lined up with
-    /// the menu bar icon when that's known.
+    /// Where the panel's own pill would appear (your placement setting, top
+    /// right by default). If the panel is open there, just below it instead,
+    /// so the popup never covers the list.
     private func targetFrame() -> NSRect {
-        let icon = statusItemFrame?()
-        let screen = icon.flatMap { frame in
-            NSScreen.screens.first { $0.frame.contains(CGPoint(x: frame.midX, y: frame.midY)) }
-        } ?? NSScreen.main ?? NSScreen.screens.first
-        let visible = screen?.visibleFrame ?? .zero
         let size = Self.size
-        var x = (icon?.maxX ?? visible.maxX - 12) - size.width + 8
-        x = min(max(x, visible.minX + 8), visible.maxX - size.width - 8)
-        let y = visible.maxY - size.height - 8
-        return NSRect(x: x, y: y, width: size.width, height: size.height)
+        let panelController = ReminderPanelController.shared
+        var frame = panelController.frameForNotice(size: size)
+        if let open = panelController.visibleFrameOnScreen, open.intersects(frame) {
+            let screen = NSScreen.screens.first { $0.frame.intersects(open) } ?? NSScreen.main
+            let visible = screen?.visibleFrame ?? .zero
+            let below = open.minY - size.height - 8
+            frame.origin.y = below >= visible.minY ? below : min(open.maxY + 8, visible.maxY - size.height)
+            frame.origin.x = min(max(open.maxX - size.width, visible.minX + 8), visible.maxX - size.width - 8)
+        }
+        return frame
     }
 }

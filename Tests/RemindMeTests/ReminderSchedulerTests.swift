@@ -140,6 +140,17 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertEqual(Item(from: habit).kind, .goal)
     }
 
+    func testShortcutUnitsInIntervals() {
+        XCTAssertEqual(ItemParser.parse("drink water every 40m").intervalSeconds, 2400)
+        XCTAssertEqual(ItemParser.parse("stretch every 2 hrs").intervalSeconds, 7200)
+        XCTAssertEqual(ItemParser.parse("stretch every 2h").intervalSeconds, 7200)
+        XCTAssertEqual(ItemParser.parse("blink every 30 sec").intervalSeconds, 30)
+        XCTAssertEqual(ItemParser.parse("blink every 30s").intervalSeconds, 30)
+        XCTAssertEqual(ItemParser.parse("drink water every 4 mins").intervalSeconds, 240)
+        XCTAssertEqual(ItemParser.parse("drink water every 40m").title, "Drink water")
+        XCTAssertEqual(ItemParser.parse("call mom every morning").kind, .goal, "no unit, no interval")
+    }
+
     // MARK: - Firing
 
     func testDueRoutinePopsTheReminder() throws {

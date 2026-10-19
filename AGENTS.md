@@ -43,8 +43,6 @@ Sources/RemindMe/
     Insights.swift               history, streaks, weekly summary, smart suggestions (pure functions)
     AwayDetector.swift           idle time → "away" (no permissions needed)
     GlobalHotkeys.swift          ⌃⌥D / ⌃⌥S / ⌃⌥K via Carbon RegisterEventHotKey, only while a reminder shows
-    NoticePill.swift             small dark popup (face + title + live countdown), no buttons; used by
-                                 the break timer, quiet reminders and the 8 PM goal check-in
     BreakCycle.swift             break timer ("rest every 40 min and take a 10 min break"): pure
                                  BreakCycleState + BreakCycleManager; state in UserDefaults (not
                                  SwiftData), countdown in the menu bar, pauses while the Mac sleeps
@@ -53,6 +51,9 @@ Sources/RemindMe/
     PersistenceController.swift  ModelContainer
   Panel/
     ReminderPanel.swift          borderless non-activating NSPanel
+    NoticePill.swift             small dark popup (face + title + text + live countdown), no buttons,
+                                 shown where the panel's pill goes (below the panel if it's open);
+                                 used by the break timer, quiet reminders and the 8 PM goal check-in
     ReminderPanelController.swift  show/hide fades, auto-hide, sizes, placement, overlays
   Views/
     PanelRootView.swift          picks the layer: live reminder > end of day > weekly > list > pill
@@ -115,3 +116,7 @@ Design/, scripts/trace_faces.py  source art + the tracer that generated Faces/Fa
 - Habit = `.habit` (nil `styleRaw` counts as habit): the full card and notification.
 - Goal = `kind == .goal`: no schedule; one 8 PM popup per day while any is open (`GoalNudgeSettings`).
 - All sounds are off. Don't add any.
+- Typing shows a live preview (with the type chooser) above the field; Enter saves at once.
+- The break timer is listed in its own "Break timer" section (`BreakTimerSection`): `stop()` greys it
+  out but keeps `config`, `resume()` restarts it, `remove()` forgets it. Lengths are in seconds.
+- A menu bar click opens the list directly (`openMainPage`), not the small pill.

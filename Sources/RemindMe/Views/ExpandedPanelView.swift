@@ -3,13 +3,25 @@ import SwiftData
 
 /// What's been typed in the panel but not saved yet. Lives outside the view
 /// so it survives the panel fading away and coming back: a half-typed
-/// reminder or a confirmation waiting for Save is still there next time.
+/// reminder is still there next time.
 @MainActor
 final class PanelDraft: ObservableObject {
     static let shared = PanelDraft()
-    @Published var text = ""
-    @Published var pending: ParsedItem?
+    @Published var text = "" {
+        didSet { if text.trimmingCharacters(in: .whitespaces).isEmpty { chosen = nil } }
+    }
+    /// Reminder / Habit / Goal picked in the preview; nil = the default.
+    @Published var chosen: ItemType?
     private init() {}
+
+    /// What Enter would save, shown live above the field while typing.
+    var preview: ParsedItem? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        var parsed = ItemParser.parse(trimmed)
+        parsed.chosen = chosen
+        return parsed
+    }
 }
 
 /// The open panel: goals at the top, reminders (routines) in the middle,
@@ -188,7 +200,7 @@ struct ExpandedPanelView: View {
                 Divider().opacity(0.1)
             }
 
-            if items.isEmpty {
+            if items.isEmpty && BreakCycleManager.shared.config == nil {
                 emptyState
             } else {
                 list
@@ -200,8 +212,8 @@ struct ExpandedPanelView: View {
             }
 
             Divider().opacity(0.15)
-            if let pending = draft.pending {
-                confirmationBar(pending)
+            if let preview = draft.preview {
+                confirmationBar(preview)
                 Divider().opacity(0.15)
             }
             inputRow
@@ -210,6 +222,9 @@ struct ExpandedPanelView: View {
 
     private var list: some View {
         List {
+            if categoryFilter == nil {
+                BreakTimerSection(theme: theme)
+            }
             if !goals.isEmpty {
                 Section("Goals") {
                     ForEach(goals) { item in itemRow(item) }
@@ -237,7 +252,8 @@ struct ExpandedPanelView: View {
                     }
                 }
             }
-            if goals.isEmpty && habits.isEmpty && reminders.isEmpty && sortedToday.isEmpty {
+            if goals.isEmpty && habits.isEmpty && reminders.isEmpty && sortedToday.isEmpty
+                && (categoryFilter != nil || BreakCycleManager.shared.config == nil) {
                 Text("Nothing in this category yet.")
                     .font(theme.font)
                     .foregroundStyle(theme.text.opacity(0.5))
@@ -507,7 +523,7 @@ struct ExpandedPanelView: View {
                 ForEach(ItemType.allCases, id: \.self) { type in
                     let available = type == .goal || parsed.hasSchedule
                     let selected = parsed.type == type
-                    Button { draft.pending?.chosen = type } label: {
+                    Button { draft.chosen = type } label: {
                         Label(type.label, systemImage: type.icon)
                             .font(.system(size: theme.fontSize - 2, weight: selected ? .semibold : .regular))
                             .padding(.horizontal, 9)
@@ -561,21 +577,14 @@ struct ExpandedPanelView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(theme.text.opacity(0.5))
-            .help("Discard")
-
-            Button(action: editConfirmation) {
-                Image(systemName: "pencil.circle")
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(theme.text.opacity(0.5))
-            .help("Edit the text and re-check")
+            .help("Clear")
 
             Button(action: saveConfirmed) {
                 Image(systemName: "checkmark.circle.fill")
             }
             .buttonStyle(.plain)
             .foregroundStyle(theme.accent)
-            .help("Save")
+            .help("Save (Enter)")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -619,28 +628,27 @@ struct ExpandedPanelView: View {
         }
     }
 
+    /// Enter saves straight away; the preview above the field already showed
+    /// what it will be (and the Reminder / Habit / Goal pick).
     private func handleSubmit() {
-        let trimmed = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        draft.pending = ItemParser.parse(trimmed)
+        saveConfirmed()
     }
 
     private func saveConfirmed() {
-        guard let pending = draft.pending else { return }
-        // A break timer isn't a routine: start the menu bar countdown instead.
+        guard let pending = draft.preview else { return }
         if let cycle = pending.breakCycle {
+            // A break timer isn't a routine: it starts the menu bar countdown
+            // and shows in the list's "Break timer" section.
             BreakCycleManager.shared.startCycle(cycle)
-            draft.text = ""
-            draft.pending = nil
-            ReminderPanelController.shared.keepOpenUntilClickAway()
-            return
+        } else {
+            let item = Item(from: pending)
+            if let category = pending.category { rememberCategory(category) }
+            modelContext.insert(item)
+            NotificationService.shared.schedule(for: item)
         }
-        let item = Item(from: pending)
-        if let category = pending.category { rememberCategory(category) }
-        modelContext.insert(item)
-        NotificationService.shared.schedule(for: item)
         draft.text = ""
-        draft.pending = nil
+        draft.chosen = nil
+        fieldFocused = true
         // Added: the panel stays up until the next click elsewhere.
         ReminderPanelController.shared.keepOpenUntilClickAway()
     }
@@ -654,14 +662,7 @@ struct ExpandedPanelView: View {
 
     private func cancelConfirmation() {
         draft.text = ""
-        draft.pending = nil
-        fieldFocused = true
-    }
-
-    /// Dismisses the confirmation but keeps the typed text, so the person
-    /// can tweak it and submit again rather than retyping from scratch.
-    private func editConfirmation() {
-        draft.pending = nil
+        draft.chosen = nil
         fieldFocused = true
     }
 
@@ -745,5 +746,80 @@ struct SuggestionBar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color.yellow.opacity(0.06))
+    }
+}
+
+/// The break timer as a list row, like any routine: blue bolt while it runs,
+/// grey when off (click to switch), a live "Working · 32:10 left" line, and
+/// right-click / swipe to delete. Its own view so the per-second countdown
+/// only redraws this row, not the whole list.
+struct BreakTimerSection: View {
+    let theme: PanelTheme
+    @ObservedObject private var breaks = BreakCycleManager.shared
+
+    var body: some View {
+        if let config = breaks.config {
+            Section("Break timer") {
+                row(config, running: breaks.state)
+            }
+        }
+    }
+
+    private func row(_ config: BreakCycleConfig, running: BreakCycleState?) -> some View {
+        HStack(spacing: 10) {
+            Button { toggle() } label: {
+                Image(systemName: "bolt.circle.fill")
+                    .font(.system(size: theme.fontSize + 3))
+                    .foregroundStyle(running != nil ? ReminderRowView.onColor : theme.text.opacity(0.3))
+            }
+            .buttonStyle(.plain)
+            .help(running != nil ? "Turn off" : "Turn on")
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(config.title)
+                    .font(theme.font)
+                    .foregroundStyle(running != nil ? theme.text : theme.text.opacity(0.4))
+                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    if let running {
+                        Image(systemName: running.phase == .onBreak ? "cup.and.saucer.fill" : "repeat")
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            let left = BreakCycleState.clockString(running.remaining(at: context.date))
+                            Text(running.phase == .onBreak ? "On break · \(left) left" : "Working · \(left) to break")
+                                .monospacedDigit()
+                        }
+                    } else {
+                        Image(systemName: "pause.fill")
+                        Text("Off")
+                    }
+                }
+                .font(.system(size: theme.fontSize - 2))
+                .foregroundStyle(theme.text.opacity(0.5))
+                .lineLimit(1)
+            }
+            Spacer(minLength: 4)
+        }
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .listRowBackground(Color.clear)
+        .listRowSeparatorTint(Color.white.opacity(0.08))
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button { breaks.remove() } label: { Label("Delete", systemImage: "trash") }
+                .tint(.red)
+        }
+        .contextMenu {
+            if running != nil {
+                Button("Turn off") { breaks.stop() }
+                Button("Start over") { breaks.resume() }
+            } else {
+                Button("Turn on") { breaks.resume() }
+            }
+            Divider()
+            Button("Delete", role: .destructive) { breaks.remove() }
+        }
+    }
+
+    private func toggle() {
+        if breaks.isRunning { breaks.stop() } else { breaks.resume() }
     }
 }

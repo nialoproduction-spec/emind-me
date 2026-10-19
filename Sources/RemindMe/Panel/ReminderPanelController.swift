@@ -172,18 +172,27 @@ final class ReminderPanelController: ObservableObject {
         resize(to: Self.collapsedSize, animated: false)
     }
 
-    /// Menu bar click: show the pill (it then hides itself), or put the
-    /// panel away if it's already up. A reminder waiting for an answer is
-    /// never put away this way — the click brings it to the front instead.
+    /// Menu bar click: open the main page (the list), or put the panel away
+    /// if it's already up. A reminder waiting for an answer is never put away
+    /// this way — the click brings it to the front instead.
     func toggleVisibility() {
         guard panel != nil else { return }
         if isOverlayActive {
             show()
         } else if isOnScreen {
-            hide()
+            if isExpanded { hide() } else { setExpanded(true) }
         } else {
-            show()
+            openMainPage()
         }
+    }
+
+    /// Straight to the list at full size, fading in (no pill first).
+    func openMainPage() {
+        guard panel != nil else { return }
+        isExpanded = true
+        if !isOnScreen { resize(to: Self.expandedSize, animated: false) }
+        show()
+        if isOnScreen { resize(to: Self.expandedSize, animated: true) }
     }
 
     /// Right after something is added: the panel stays up, however long it
@@ -405,6 +414,16 @@ final class ReminderPanelController: ObservableObject {
     }
 
     // MARK: - Placement
+
+    /// Where a popup of `size` goes: the same spot as the panel's pill.
+    func frameForNotice(size: CGSize) -> NSRect {
+        targetFrame(for: size)
+    }
+
+    /// The panel's frame while it's on screen, else nil.
+    var visibleFrameOnScreen: NSRect? {
+        isOnScreen ? panel?.frame : nil
+    }
 
     /// Where a panel of `size` belongs right now, per the placement setting.
     private func targetFrame(for size: CGSize) -> NSRect {

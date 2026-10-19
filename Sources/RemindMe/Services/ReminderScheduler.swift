@@ -71,7 +71,9 @@ final class ReminderScheduler: ObservableObject {
     private var wakeObserver: NSObjectProtocol?
     private var spaceObserver: NSObjectProtocol?
 
-    private let tickInterval: TimeInterval = 20
+    /// Short enough for reminders every few seconds; the tick is only a few
+    /// date comparisons.
+    private let tickInterval: TimeInterval = 5
     let suppressedRetryInterval: TimeInterval = 45
 
     // Injected so tests can drive time, the screen, and settings directly.
