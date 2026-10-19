@@ -63,6 +63,8 @@ final class IslandModel: ObservableObject {
     struct Ambient: Equatable {
         var onBreak: Bool
         var end: Date
+        /// Break's over, waiting for the person to come back.
+        var waiting = false
     }
 
     @Published var mode: Mode = .hidden
@@ -114,6 +116,7 @@ struct IslandView: View {
 
     private var contentKey: String {
         if model.mode == .expanded, let content = model.expanded { return content.id.uuidString }
+        if model.ambient?.waiting == true { return "waiting" }
         return model.ambient?.onBreak == true ? "break" : "work"
     }
 
@@ -124,6 +127,8 @@ struct IslandView: View {
                 if let face = content.face { FaceGlyph(face: face) }
                 Text(content.title)
                     .font(.system(size: IslandGeometry.font, weight: .semibold))
+            } else if model.ambient?.waiting == true {
+                FaceGlyph(face: .sleepy)
             } else if model.ambient?.onBreak == true {
                 Image(systemName: "cup.and.saucer.fill")
                     .font(.system(size: 11, weight: .semibold))
@@ -148,7 +153,13 @@ struct IslandView: View {
                 }
                 if let end = content.countdownTo { Countdown(end: end) }
             } else if let ambient = model.ambient {
-                Countdown(end: ambient.end)
+                if ambient.waiting {
+                    Text("Waiting")
+                        .font(.system(size: IslandGeometry.font, weight: .semibold))
+                        .foregroundStyle(.white)
+                } else {
+                    Countdown(end: ambient.end)
+                }
             }
         }
         .lineLimit(1)
@@ -230,7 +241,9 @@ final class BreakIslandController {
 
     /// The running timer (nil = none): shown small whenever nothing's announced.
     func setAmbient(_ state: BreakCycleState?) {
-        let ambient = state.map { IslandModel.Ambient(onBreak: $0.phase == .onBreak, end: $0.phaseEnd) }
+        let ambient = state.map {
+            IslandModel.Ambient(onBreak: $0.phase == .onBreak, end: $0.phaseEnd, waiting: $0.phase == .waiting)
+        }
         guard ambient != model.ambient || model.mode == .hidden else { return }
         model.ambient = ambient
         guard model.mode != .expanded else { return } // shrinks to the new state when it's done
@@ -329,7 +342,7 @@ final class BreakIslandController {
             if let end = content.countdownTo { right += (right > 0 ? gap : 0) + clock(end) }
         } else if let ambient = model.ambient {
             left = ambient.onBreak ? 14 + gap + width("Break", semibold) : faceWidth
-            right = clock(ambient.end)
+            right = ambient.waiting ? width("Waiting", semibold) : clock(ambient.end)
         }
         return IslandGeometry.wingWidth(left: left, right: right)
     }

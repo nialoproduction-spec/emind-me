@@ -54,8 +54,10 @@ struct BreakCycleConfig: Codable, Equatable {
 /// the end of the current phase is an absolute `Date` (rule 3), and callers
 /// just ask "has it passed?".
 struct BreakCycleState: Codable, Equatable {
-    enum Phase: String, Codable { case work, onBreak }
-    enum Event: Equatable { case breakStarted, breakEnded }
+    /// `waiting`: the break is over but nobody's at the Mac, so the next work
+    /// stretch hasn't started; it starts the moment they're back.
+    enum Phase: String, Codable { case work, onBreak, waiting }
+    enum Event: Equatable { case breakStarted, breakEnded, waitingForYou }
     /// Heads-ups partway through a phase, each shown once per phase.
     enum Milestone: Hashable { case lastTen, lastSeconds }
 
@@ -76,25 +78,50 @@ struct BreakCycleState: Codable, Equatable {
         )
     }
 
-    var phaseSeconds: Int { phase == .work ? config.workSeconds : config.breakSeconds }
+    var phaseSeconds: Int {
+        switch phase {
+        case .work: return config.workSeconds
+        case .onBreak: return config.breakSeconds
+        case .waiting: return 0
+        }
+    }
 
     /// Moves to the next phase if the current one is over. Returns what
     /// happened, or nil if nothing changed. At most one step per call, and the
     /// next phase counts from `now`: a long gap costs one missed switch, never
     /// a backlog of them.
+    ///
+    /// `userIsAway`: when a break ends with nobody at the Mac, work doesn't
+    /// start by itself; it waits (see `resumeWork`).
     @discardableResult
-    mutating func advance(now: Date) -> Event? {
-        guard now >= phaseEnd else { return nil }
+    mutating func advance(now: Date, userIsAway: Bool = false) -> Event? {
+        guard phase != .waiting, now >= phaseEnd else { return nil }
         switch phase {
         case .work:
             phase = .onBreak
             phaseEnd = now.addingTimeInterval(TimeInterval(config.breakSeconds))
             return .breakStarted
         case .onBreak:
+            if userIsAway {
+                phase = .waiting
+                phaseEnd = now
+                return .waitingForYou
+            }
             phase = .work
             phaseEnd = now.addingTimeInterval(TimeInterval(config.workSeconds))
             return .breakEnded
+        case .waiting:
+            return nil
         }
+    }
+
+    /// They're back after a break: the work stretch starts counting now.
+    @discardableResult
+    mutating func resumeWork(now: Date) -> Event? {
+        guard phase == .waiting else { return nil }
+        phase = .work
+        phaseEnd = now.addingTimeInterval(TimeInterval(config.workSeconds))
+        return .breakEnded
     }
 
     /// The Mac was asleep for `seconds`: push the end back so sleep doesn't
@@ -104,7 +131,7 @@ struct BreakCycleState: Codable, Equatable {
     }
 
     func remaining(at now: Date) -> TimeInterval {
-        max(0, phaseEnd.timeIntervalSince(now))
+        phase == .waiting ? 0 : max(0, phaseEnd.timeIntervalSince(now))
     }
 
     /// The most urgent heads-up that's due and hasn't been shown this phase.
@@ -136,7 +163,11 @@ struct BreakCycleState: Codable, Equatable {
     /// Text shown next to the menu bar icon.
     func menuBarTitle(at now: Date) -> String {
         let time = Self.clockString(remaining(at: now))
-        return phase == .onBreak ? "Break \(time)" : time
+        switch phase {
+        case .work: return time
+        case .onBreak: return "Break \(time)"
+        case .waiting: return "Waiting"
+        }
     }
 }
 
@@ -174,6 +205,14 @@ final class BreakCycleManager: ObservableObject {
     private let notice: @MainActor (NoticeContent?) -> Void
     /// The running timer for the notch's small countdown; nil = none.
     private let ambient: @MainActor (BreakCycleState?) -> Void
+    /// Seconds since the last key press, click or mouse move.
+    private let idleSeconds: @MainActor () -> TimeInterval
+
+    /// When a break ends, no input for this long means "not at the Mac", so
+    /// work waits instead of starting by itself.
+    static let awayAfter: TimeInterval = 20
+    /// While waiting, input this recent means "back": work starts now.
+    static let backWithin: TimeInterval = 2
 
     private var timer: Timer?
     private var timerEnabled = false
@@ -185,7 +224,8 @@ final class BreakCycleManager: ObservableObject {
         defaults: UserDefaults = .standard,
         now: (@MainActor () -> Date)? = nil,
         notice: (@MainActor (NoticeContent?) -> Void)? = nil,
-        ambient: (@MainActor (BreakCycleState?) -> Void)? = nil
+        ambient: (@MainActor (BreakCycleState?) -> Void)? = nil,
+        idleSeconds: (@MainActor () -> TimeInterval)? = nil
     ) {
         self.defaults = defaults
         self.clock = now ?? { Date.now }
@@ -197,6 +237,7 @@ final class BreakCycleManager: ObservableObject {
             }
         }
         self.ambient = ambient ?? { BreakIslandController.shared.setAmbient($0) }
+        self.idleSeconds = idleSeconds ?? { AwayDetector.idleSeconds() }
         if let data = defaults.data(forKey: configKey),
            let saved = try? JSONDecoder().decode(BreakCycleConfig.self, from: data) {
             config = saved
@@ -278,7 +319,19 @@ final class BreakCycleManager: ObservableObject {
     func tick() {
         guard var current = state, sleepStart == nil else { return }
         let now = clock()
-        if let event = current.advance(now: now) {
+        if current.phase == .waiting {
+            // Waiting after a break: start the work stretch the moment they're back.
+            if idleSeconds() <= Self.backWithin, current.resumeWork(now: now) != nil {
+                state = current
+                shown = []
+                persist()
+                ambient(current)
+                notice(Self.workStartNotice(for: current, afterBreak: true))
+            }
+        } else if let event = current.advance(
+            now: now,
+            userIsAway: current.phase == .onBreak && now >= current.phaseEnd && idleSeconds() >= Self.awayAfter
+        ) {
             state = current
             shown = []
             persist()
@@ -286,6 +339,7 @@ final class BreakCycleManager: ObservableObject {
             switch event {
             case .breakStarted: notice(Self.breakStartNotice(for: current))
             case .breakEnded: notice(Self.workStartNotice(for: current, afterBreak: true))
+            case .waitingForYou: notice(Self.waitingNotice)
             }
         } else if let milestone = current.dueMilestone(at: now, shown: shown) {
             shown.insert(milestone)
@@ -321,13 +375,21 @@ final class BreakCycleManager: ObservableObject {
         )
     }
 
+    /// Break's over and nobody's at the Mac: stays out until they're back.
+    static let waitingNotice = NoticeContent(
+        title: "Break's over",
+        detail: "Starts when you're back",
+        face: .sleepy,
+        sticky: true
+    )
+
     static func milestoneNotice(_ milestone: BreakCycleState.Milestone, for state: BreakCycleState) -> NoticeContent {
         switch milestone {
         case .lastTen:
             return NoticeContent(title: "Last 10 minutes", countdownTo: state.phaseEnd, face: .owo, duration: 6)
         case .lastSeconds:
             // Stays out, counting to 0:00, until the next one replaces it.
-            let title = state.phase == .work ? "Break in" : "Back to work in"
+            let title = state.phase == .onBreak ? "Back to work in" : "Break in"
             return NoticeContent(title: title, countdownTo: state.phaseEnd, face: .squee, sticky: true)
         }
     }

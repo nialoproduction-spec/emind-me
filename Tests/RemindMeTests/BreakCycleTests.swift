@@ -131,6 +131,20 @@ final class BreakCycleStateTests: XCTestCase {
         XCTAssertEqual(state.menuBarTitle(at: breakStart.addingTimeInterval(18)), "Break 9:42")
     }
 
+    func testBreakEndingWhileAwayWaits() {
+        var state = BreakCycleState.started(config, at: t0)
+        state.advance(now: t0.addingTimeInterval(40 * 60))
+        let end = t0.addingTimeInterval(50 * 60)
+        XCTAssertEqual(state.advance(now: end, userIsAway: true), .waitingForYou)
+        XCTAssertEqual(state.phase, .waiting)
+        XCTAssertNil(state.advance(now: end.addingTimeInterval(9999)), "waits however long it takes")
+        XCTAssertEqual(state.remaining(at: end), 0)
+        XCTAssertNil(state.dueMilestone(at: end, shown: []))
+        let back = end.addingTimeInterval(1234)
+        XCTAssertEqual(state.resumeWork(now: back), .breakEnded)
+        XCTAssertEqual(state.remaining(at: back), 40 * 60)
+    }
+
     func testLastTenMinutesHeadsUpForALongWorkStretch() {
         let state = BreakCycleState.started(config, at: t0)
         let at29 = t0.addingTimeInterval(29 * 60)
@@ -171,13 +185,16 @@ final class BreakCycleManagerTests: XCTestCase {
     private var titles: [String] { popups.compactMap { $0?.title } }
     /// What the notch's small countdown was told, in order.
     private var ambient: [BreakCycleState?] = []
+    /// Seconds since the last key press / mouse move (0 = using the Mac).
+    private var idle: TimeInterval = 0
 
     private func makeManager(defaults: UserDefaults? = nil) -> BreakCycleManager {
         BreakCycleManager(
             defaults: defaults ?? UserDefaults(suiteName: "BreakCycleTests-\(UUID().uuidString)")!,
             now: { [unowned self] in self.now },
             notice: { [unowned self] in self.popups.append($0) },
-            ambient: { [unowned self] in self.ambient.append($0) }
+            ambient: { [unowned self] in self.ambient.append($0) },
+            idleSeconds: { [unowned self] in self.idle }
         )
     }
 
@@ -263,6 +280,61 @@ final class BreakCycleManagerTests: XCTestCase {
         XCTAssertEqual(last.title, "Back to work in")
         XCTAssertTrue(last.sticky)
         XCTAssertEqual(last.countdownTo, now.addingTimeInterval(10))
+    }
+
+    func testAwayWhenTheBreakEndsWaitsForYou() throws {
+        let manager = makeManager()
+        manager.startCycle(BreakCycleConfig(workMinutes: 40, breakMinutes: 10))
+        now.addTimeInterval(40 * 60)
+        manager.tick() // break starts
+        XCTAssertEqual(manager.state?.phase, .onBreak)
+
+        // Gone for the whole break, and still gone when it ends.
+        idle = 11 * 60
+        now.addTimeInterval(10 * 60)
+        manager.tick()
+        XCTAssertEqual(manager.state?.phase, .waiting, "work doesn't start by itself")
+        let waiting = try XCTUnwrap(popups.last ?? nil)
+        XCTAssertEqual(waiting.title, "Break's over")
+        XCTAssertTrue(waiting.sticky, "stays until you're back")
+
+        // Still away an hour later: still waiting, nothing new shown.
+        now.addTimeInterval(3600)
+        idle += 3600
+        let count = popups.count
+        manager.tick()
+        XCTAssertEqual(manager.state?.phase, .waiting)
+        XCTAssertEqual(popups.count, count)
+
+        // Back: a key press. Work counts from now, the full 40 minutes.
+        idle = 0.5
+        manager.tick()
+        XCTAssertEqual(manager.state?.phase, .work)
+        XCTAssertEqual(manager.state?.phaseEnd, now.addingTimeInterval(40 * 60))
+        XCTAssertEqual(titles.last, "Back to work")
+        XCTAssertEqual(manager.menuBarTitle, "40:00")
+    }
+
+    func testAtTheMacWhenTheBreakEndsWorkStartsRightAway() {
+        let manager = makeManager()
+        manager.startCycle(BreakCycleConfig(workMinutes: 40, breakMinutes: 10))
+        now.addTimeInterval(40 * 60)
+        manager.tick()
+        idle = 5 // used the Mac a few seconds ago
+        now.addTimeInterval(10 * 60)
+        manager.tick()
+        XCTAssertEqual(manager.state?.phase, .work)
+        XCTAssertEqual(titles.last, "Back to work")
+    }
+
+    func testWaitingSurvivesARestart() {
+        let defaults = UserDefaults(suiteName: "BreakCycleTests-\(UUID().uuidString)")!
+        let manager = makeManager(defaults: defaults)
+        manager.startCycle(BreakCycleConfig(workMinutes: 1, breakMinutes: 1))
+        now.addTimeInterval(60); manager.tick()
+        idle = 120
+        now.addTimeInterval(60); manager.tick()
+        XCTAssertEqual(makeManager(defaults: defaults).state?.phase, .waiting)
     }
 
     func testNotchCountdownFollowsTheTimer() throws {

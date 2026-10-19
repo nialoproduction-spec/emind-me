@@ -130,4 +130,7 @@ Design/, scripts/trace_faces.py  source art + the tracer that generated Faces/Fa
 - Typing shows a live preview (with the type chooser) above the field; Enter saves at once.
 - The break timer is listed in its own "Break timer" section (`BreakTimerSection`): `stop()` greys it
   out but keeps `config`, `resume()` restarts it, `remove()` forgets it. Lengths are in seconds.
+- A break that ends with no input for 20 s goes to phase `.waiting` ("Break's over" stays at the
+  notch); the next work stretch starts counting at the first key press / mouse move (idle ≤ 2 s).
+  The idle time is injected (`idleSeconds:`) so tests never read the real one.
 - A menu bar click opens the list directly (`openMainPage`), not the small pill.

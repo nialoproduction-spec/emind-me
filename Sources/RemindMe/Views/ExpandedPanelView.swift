@@ -796,7 +796,10 @@ struct BreakTimerSection: View {
                     .foregroundStyle(running != nil ? theme.text : theme.text.opacity(0.4))
                     .lineLimit(1)
                 HStack(spacing: 4) {
-                    if let running {
+                    if let running, running.phase == .waiting {
+                        Image(systemName: "moon.zzz.fill")
+                        Text("Break's over · starts when you're back")
+                    } else if let running {
                         Image(systemName: running.phase == .onBreak ? "cup.and.saucer.fill" : "repeat")
                         TimelineView(.periodic(from: .now, by: 1)) { context in
                             let left = BreakCycleState.clockString(running.remaining(at: context.date))
