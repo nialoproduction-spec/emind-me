@@ -454,6 +454,7 @@ struct ExpandedPanelView: View {
     }
 
     private func confirmationIcon(for parsed: ParsedItem) -> String {
+        if parsed.breakCycle != nil { return "cup.and.saucer" }
         switch parsed.kind {
         case .repeatingRoutine: return "repeat"
         case .scheduledRoutine: return "clock"
@@ -501,6 +502,14 @@ struct ExpandedPanelView: View {
 
     private func saveConfirmed() {
         guard let pending = draft.pending else { return }
+        // A break timer isn't a routine: start the menu bar countdown instead.
+        if let cycle = pending.breakCycle {
+            BreakCycleManager.shared.startCycle(cycle)
+            draft.text = ""
+            draft.pending = nil
+            ReminderPanelController.shared.closeAfterAdding()
+            return
+        }
         let item = Item(from: pending)
         if let category = pending.category { rememberCategory(category) }
         modelContext.insert(item)

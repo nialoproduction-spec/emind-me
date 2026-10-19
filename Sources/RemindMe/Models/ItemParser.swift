@@ -13,9 +13,15 @@ struct ParsedItem {
     var targetDate: Date?
     /// From a hashtag in the text ("#work" → "Work").
     var category: String? = nil
+    /// Set for "rest every 40 min and take a 10 min break": saving starts the
+    /// menu bar break timer instead of adding a routine.
+    var breakCycle: BreakCycleConfig? = nil
 
     /// Schedule description for the confirmation banner (title shown separately).
     var detailLine: String {
+        if let breakCycle {
+            return "\(breakCycle.breakMinutes) min break · repeats until you stop it"
+        }
         switch kind {
         case .repeatingRoutine:
             guard let intervalSeconds else { return "" }
@@ -35,6 +41,7 @@ struct ParsedItem {
     }
 
     var kindLabel: String {
+        if breakCycle != nil { return "Break timer" }
         switch kind {
         case .repeatingRoutine, .scheduledRoutine: return "Routine"
         case .goal: return "Goal"
@@ -50,10 +57,57 @@ enum ItemParser {
         // Hashtags first: "#work" anywhere sets the category and is taken out
         // of the text before anything else reads it.
         let (withoutTags, category) = extractCategory(from: raw)
+        // A break phrase ("and take a 10 min break") is cut out first, so its
+        // number can't be mistaken for part of the "every 40 min" interval.
+        if let rest = breakPhrase(in: withoutTags) {
+            let schedule = (withoutTags as NSString).replacingCharacters(in: rest.range, with: " ")
+            var cycle = parseSchedule(schedule)
+            if cycle.kind == .repeatingRoutine, let interval = cycle.intervalSeconds {
+                let work = max(1, Int((interval / 60).rounded()))
+                let breakMinutes = max(1, Int((rest.seconds / 60).rounded()))
+                cycle.category = category
+                cycle.breakCycle = BreakCycleConfig(workMinutes: work, breakMinutes: breakMinutes)
+                cycle.title = "Rest every \(work) min"
+                return cycle
+            }
+        }
         var parsed = parseSchedule(withoutTags)
         parsed.category = category
         return parsed
     }
+
+    /// A break named in the text ("take a 10 min break", "break for ten
+    /// minutes"): its length in seconds and where it sits in the text.
+    static func breakPhrase(in text: String) -> (seconds: Double, range: NSRange)? {
+        let ns = text as NSString
+        let full = NSRange(location: 0, length: ns.length)
+        for regex in [breakAfterRegex, breakBeforeRegex] {
+            guard let match = regex.firstMatch(in: text, range: full) else { continue }
+            let quantity = parseQuantity(ns.substring(with: match.range(withName: "qty")))
+            let unit = ns.substring(with: match.range(withName: "unit")).lowercased()
+            if let quantity, quantity > 0 { return (quantity * unitSeconds(unit), match.range) }
+        }
+        return nil
+    }
+
+    /// A number as digits or words ("10", "ten", "forty five") — and nothing
+    /// else, so surrounding words can't leak into the amount.
+    private static let breakQuantity: String = {
+        let word = "(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)"
+        return #"(?:\d+(?:\.\d+)?|"# + word + #"(?:[\s-]"# + word + #")?)"#
+    }()
+
+    /// "10 min break", "ten-minute break".
+    private static let breakAfterRegex = try! NSRegularExpression(
+        pattern: #"\b(?<qty>"# + breakQuantity + #")\s*-?\s*(?<unit>minutes?|mins?|hours?|hrs?)\s+break\b"#,
+        options: [.caseInsensitive]
+    )
+
+    /// "break of 10 minutes", "break for ten min".
+    private static let breakBeforeRegex = try! NSRegularExpression(
+        pattern: #"\bbreak\s+(?:of|for|is|lasting)?\s*(?<qty>"# + breakQuantity + #")\s*(?<unit>minutes?|mins?|hours?|hrs?)\b"#,
+        options: [.caseInsensitive]
+    )
 
     /// The first "#tag" becomes the category (capitalised); all tags are removed.
     static func extractCategory(from text: String) -> (text: String, category: String?) {
@@ -226,7 +280,7 @@ enum ItemParser {
 
     // MARK: - Quantity / unit helpers
 
-    private static func unitSeconds(_ unit: String) -> Double {
+    static func unitSeconds(_ unit: String) -> Double {
         if unit.hasPrefix("sec") { return 1 }
         if unit.hasPrefix("min") { return 60 }
         if unit.hasPrefix("hour") || unit.hasPrefix("hr") { return 3600 }
@@ -235,7 +289,7 @@ enum ItemParser {
         return 60
     }
 
-    private static func parseQuantity(_ raw: String) -> Double? {
+    static func parseQuantity(_ raw: String) -> Double? {
         let cleaned = raw.lowercased().trimmingCharacters(in: .whitespaces)
         if cleaned.contains("half") { return 0.5 }
         if let value = Double(cleaned) { return value }
