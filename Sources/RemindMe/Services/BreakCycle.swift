@@ -170,8 +170,10 @@ final class BreakCycleManager: ObservableObject {
     private let key = "breakCycle.v1"
     private let configKey = "breakCycle.config.v1"
     private let clock: @MainActor () -> Date
-    /// Show a popup; nil puts the current one away.
+    /// Announce a moment at the notch; nil puts it away.
     private let notice: @MainActor (NoticeContent?) -> Void
+    /// The running timer for the notch's small countdown; nil = none.
+    private let ambient: @MainActor (BreakCycleState?) -> Void
 
     private var timer: Timer?
     private var timerEnabled = false
@@ -182,17 +184,19 @@ final class BreakCycleManager: ObservableObject {
     init(
         defaults: UserDefaults = .standard,
         now: (@MainActor () -> Date)? = nil,
-        notice: (@MainActor (NoticeContent?) -> Void)? = nil
+        notice: (@MainActor (NoticeContent?) -> Void)? = nil,
+        ambient: (@MainActor (BreakCycleState?) -> Void)? = nil
     ) {
         self.defaults = defaults
         self.clock = now ?? { Date.now }
         self.notice = notice ?? { content in
             if let content {
-                NoticePillController.shared.show(content)
+                BreakIslandController.shared.show(content)
             } else {
-                NoticePillController.shared.hide()
+                BreakIslandController.shared.hide()
             }
         }
+        self.ambient = ambient ?? { BreakIslandController.shared.setAmbient($0) }
         if let data = defaults.data(forKey: configKey),
            let saved = try? JSONDecoder().decode(BreakCycleConfig.self, from: data) {
             config = saved
@@ -223,6 +227,7 @@ final class BreakCycleManager: ObservableObject {
             Task { @MainActor in self?.didWake() }
         })
         if state != nil { startTimer() }
+        ambient(state)
         tick()
     }
 
@@ -238,6 +243,7 @@ final class BreakCycleManager: ObservableObject {
         if let data = try? JSONEncoder().encode(config) { defaults.set(data, forKey: configKey) }
         menuBarTitle = fresh.menuBarTitle(at: now)
         if timerEnabled { startTimer() }
+        ambient(fresh)
         notice(Self.workStartNotice(for: fresh, afterBreak: false))
     }
 
@@ -263,6 +269,7 @@ final class BreakCycleManager: ObservableObject {
         timer?.invalidate()
         timer = nil
         defaults.removeObject(forKey: key)
+        ambient(nil)
         notice(nil)
     }
 
@@ -275,6 +282,7 @@ final class BreakCycleManager: ObservableObject {
             state = current
             shown = []
             persist()
+            ambient(current)
             switch event {
             case .breakStarted: notice(Self.breakStartNotice(for: current))
             case .breakEnded: notice(Self.workStartNotice(for: current, afterBreak: true))
@@ -337,6 +345,7 @@ final class BreakCycleManager: ObservableObject {
         sleepStart = nil
         state = current
         persist()
+        ambient(current)
         tick()
     }
 

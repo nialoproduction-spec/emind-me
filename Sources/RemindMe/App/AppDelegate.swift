@@ -40,26 +40,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.action = #selector(statusItemClicked(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
-        // The break timer's countdown, next to the icon while a cycle runs.
-        BreakCycleManager.shared.$menuBarTitle
-            .receive(on: RunLoop.main)
-            .sink { [weak self] title in self?.showBreakTitle(title) }
-            .store(in: &cancellables)
+        // The break timer counts down at the notch (BreakIsland), not here:
+        // the menu bar keeps just the face.
         // For "under the menu bar icon" placement.
         ReminderPanelController.shared.statusItemFrame = { [weak self] in
             self?.statusItem.button?.window?.frame
-        }
-    }
-
-    private func showBreakTitle(_ title: String) {
-        guard let button = statusItem?.button else { return }
-        if title.isEmpty {
-            button.title = ""
-            button.imagePosition = .imageOnly
-        } else {
-            button.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
-            button.title = " " + title
-            button.imagePosition = .imageLeft
         }
     }
 

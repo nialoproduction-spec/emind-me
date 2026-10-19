@@ -169,12 +169,15 @@ final class BreakCycleManagerTests: XCTestCase {
     private var popups: [NoticeContent?] = []
 
     private var titles: [String] { popups.compactMap { $0?.title } }
+    /// What the notch's small countdown was told, in order.
+    private var ambient: [BreakCycleState?] = []
 
     private func makeManager(defaults: UserDefaults? = nil) -> BreakCycleManager {
         BreakCycleManager(
             defaults: defaults ?? UserDefaults(suiteName: "BreakCycleTests-\(UUID().uuidString)")!,
             now: { [unowned self] in self.now },
-            notice: { [unowned self] in self.popups.append($0) }
+            notice: { [unowned self] in self.popups.append($0) },
+            ambient: { [unowned self] in self.ambient.append($0) }
         )
     }
 
@@ -260,6 +263,23 @@ final class BreakCycleManagerTests: XCTestCase {
         XCTAssertEqual(last.title, "Back to work in")
         XCTAssertTrue(last.sticky)
         XCTAssertEqual(last.countdownTo, now.addingTimeInterval(10))
+    }
+
+    func testNotchCountdownFollowsTheTimer() throws {
+        let manager = makeManager()
+        manager.startCycle(BreakCycleConfig(workMinutes: 40, breakMinutes: 10))
+        let first = try XCTUnwrap(ambient.last ?? nil)
+        XCTAssertEqual(first.phase, .work)
+        XCTAssertEqual(first.phaseEnd, now.addingTimeInterval(40 * 60))
+
+        now.addTimeInterval(40 * 60)
+        manager.tick()
+        let onBreak = try XCTUnwrap(ambient.last ?? nil)
+        XCTAssertEqual(onBreak.phase, .onBreak, "the break counts down at the notch too")
+        XCTAssertEqual(onBreak.phaseEnd, now.addingTimeInterval(10 * 60))
+
+        manager.stop()
+        XCTAssertNil(ambient.last ?? nil, "gone when the timer is off")
     }
 
     func testTurnedOffTimerStaysSavedAndTurnsBackOn() throws {

@@ -46,16 +46,17 @@ Sources/RemindMe/
     GlobalHotkeys.swift          ⌃⌥D / ⌃⌥S / ⌃⌥K via Carbon RegisterEventHotKey, only while a reminder shows
     BreakCycle.swift             break timer ("rest every 40 min and take a 10 min break"): pure
                                  BreakCycleState + BreakCycleManager; state in UserDefaults (not
-                                 SwiftData), countdown in the menu bar, pauses while the Mac sleeps
+                                 SwiftData), countdown at the notch (not the menu bar), pauses while the Mac sleeps
     NotificationService.swift    local UNUserNotifications
     FocusGuard.swift             full-screen / Focus detection
     PersistenceController.swift  ModelContainer
   Panel/
     ReminderPanel.swift          borderless non-activating NSPanel
-    NoticePill.swift             the notch "island": black shape that grows out of the camera notch,
-                                 title left of it, note/countdown right of it (IslandGeometry is the
-                                 pure layout maths); used by the break timer, quiet reminders and
-                                 the 8 PM goal check-in
+    NoticePill.swift             reminders' popup: small dark pill where the panel's pill goes (face,
+                                 title, note), no buttons
+    BreakIsland.swift            the break timer's home, at the camera notch (Dynamic Island style):
+                                 small face/"Break" + countdown while a timer runs, widens with words
+                                 at start / last 10 min / last 10 s / break; IslandGeometry = pure maths
     ReminderPanelController.swift  show/hide fades, auto-hide, sizes, placement, overlays
   Views/
     PanelRootView.swift          picks the layer: live reminder > end of day > weekly > list > pill

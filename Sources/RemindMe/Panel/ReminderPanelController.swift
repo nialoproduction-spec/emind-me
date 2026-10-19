@@ -415,6 +415,16 @@ final class ReminderPanelController: ObservableObject {
 
     // MARK: - Placement
 
+    /// Where a popup of `size` goes: the same spot as the panel's pill.
+    func frameForNotice(size: CGSize) -> NSRect {
+        targetFrame(for: size)
+    }
+
+    /// The panel's frame while it's on screen, else nil.
+    var visibleFrameOnScreen: NSRect? {
+        isOnScreen ? panel?.frame : nil
+    }
+
 
     /// Where a panel of `size` belongs right now, per the placement setting.
     private func targetFrame(for size: CGSize) -> NSRect {

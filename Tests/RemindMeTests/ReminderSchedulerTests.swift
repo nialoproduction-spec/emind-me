@@ -254,19 +254,27 @@ final class ReminderSchedulerTests: XCTestCase {
     }
 
     func testIslandSitsOnTheNotch() {
-        let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
-        let layout = IslandGeometry.layout(screenFrame: screen, notch: CGSize(width: 185, height: 32))
-        XCTAssertTrue(layout.hasNotch)
-        XCTAssertEqual(layout.middleWidth, 185)
-        XCTAssertEqual(layout.frame.height, 32, "as tall as the notch")
-        XCTAssertEqual(layout.frame.maxY, 982, "flush with the top of the screen")
-        XCTAssertEqual(layout.frame.midX, 756, "centred on the notch")
-        XCTAssertEqual(layout.frame.width, 185 + IslandGeometry.wingWidth * 2)
+        // 16-inch MacBook Pro at its default size.
+        let screen = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+        let notch = IslandGeometry.notch(CGSize(width: 200, height: 37))
+        XCTAssertTrue(notch.hasNotch)
+        let frame = IslandGeometry.frame(screen: screen, notch: notch, wing: 60)
+        XCTAssertEqual(frame.height, 37, "as tall as the notch")
+        XCTAssertEqual(frame.maxY, 1117, "flush with the top of the screen")
+        XCTAssertEqual(frame.midX, 864, "centred on the notch")
+        XCTAssertEqual(frame.width, 200 + 120)
 
-        let plain = IslandGeometry.layout(screenFrame: screen, notch: .zero)
+        let plain = IslandGeometry.notch(.zero)
         XCTAssertFalse(plain.hasNotch)
         XCTAssertEqual(plain.middleWidth, IslandGeometry.noNotchGap)
-        XCTAssertEqual(plain.frame.maxY, 982)
+    }
+
+    func testIslandWingsFitTheText() {
+        // Sized to the wider side, plus the gaps: the text hugs the notch.
+        XCTAssertEqual(IslandGeometry.wingWidth(left: 80, right: 30),
+                       80 + IslandGeometry.innerGap + IslandGeometry.outerPadding)
+        XCTAssertEqual(IslandGeometry.wingWidth(left: 5, right: 5), IslandGeometry.minWing, "never too thin")
+        XCTAssertEqual(IslandGeometry.wingWidth(left: 900, right: 5), IslandGeometry.maxWing, "never too far out")
     }
 
     func testShortcutUnitsInIntervals() {
