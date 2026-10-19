@@ -16,10 +16,10 @@ permissions:
 
 jobs:
   build:
-    # Apple Silicon runner — build.sh refuses to build on Intel. Pinned to
-    # macos-15 (also Apple Silicon): the macos-latest pool kept cancelling
-    # jobs for lack of capacity.
-    runs-on: macos-15
+    # Intel runner, cross-compiling the Apple Silicon app (build.sh passes
+    # --arch arm64). The free Apple Silicon pools (macos-latest, macos-15)
+    # kept cancelling jobs for lack of capacity.
+    runs-on: macos-15-intel
     timeout-minutes: 30
 
     steps:
@@ -66,6 +66,8 @@ jobs:
         run: |
           chmod +x build.sh
           ./build.sh
+          # Must be an Apple Silicon binary even when built on Intel.
+          lipo -archs "dist/Remind Me.app/Contents/MacOS/RemindMe" | grep -qx arm64
 
       - name: Publish .dmg as a Release
         env:

@@ -19,8 +19,10 @@ cd "$(dirname "$0")"
 
 ARCH="$(uname -m)"
 if [ "$ARCH" != "arm64" ]; then
-    echo "error: Remind Me is Apple Silicon only (built on $ARCH)." >&2
-    exit 1
+    # The app itself is still Apple Silicon only: --arch arm64 below
+    # cross-compiles it. (CI uses an Intel runner when Apple Silicon runners
+    # are out of capacity.)
+    echo "note: building on $ARCH — cross-compiling for Apple Silicon (arm64)."
 fi
 
 APP_NAME="RemindMe"
