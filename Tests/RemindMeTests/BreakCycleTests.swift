@@ -203,7 +203,7 @@ final class BreakCycleManagerTests: XCTestCase {
         manager.startCycle(BreakCycleConfig(workMinutes: 40, breakMinutes: 10))
         XCTAssertEqual(manager.menuBarTitle, "40:00")
         let popup = try XCTUnwrap(popups.last ?? nil)
-        XCTAssertEqual(popup.title, "Work")
+        XCTAssertEqual(popup.title, "Working")
         XCTAssertEqual(popup.countdownTo, now.addingTimeInterval(40 * 60))
         XCTAssertFalse(popup.sticky)
     }
@@ -214,16 +214,17 @@ final class BreakCycleManagerTests: XCTestCase {
 
         now.addTimeInterval(20 * 60)
         manager.tick()
-        XCTAssertEqual(titles, ["Work"], "quiet in the middle")
+        XCTAssertEqual(titles, ["Working"], "quiet in the middle")
 
         now.addTimeInterval(10 * 60) // 10 minutes left
         manager.tick()
-        XCTAssertEqual(titles.last, "Last 10 minutes")
+        XCTAssertEqual(titles.last, "Working")
+        XCTAssertEqual(popups.count, 2, "shown again with 10 minutes left")
 
         now.addTimeInterval(10 * 60 - 10) // 10 seconds left
         manager.tick()
         let last = try XCTUnwrap(popups.last ?? nil)
-        XCTAssertEqual(last.title, "Break in")
+        XCTAssertEqual(last.title, "Working", "no \"Break in\": the same face and countdown")
         XCTAssertTrue(last.sticky, "the last seconds stay on screen, counting")
         manager.tick()
         XCTAssertEqual(popups.count, 3, "and it isn't re-shown every tick")
@@ -231,28 +232,30 @@ final class BreakCycleManagerTests: XCTestCase {
         now.addTimeInterval(10)
         manager.tick()
         let breakPopup = try XCTUnwrap(popups.last ?? nil)
-        XCTAssertEqual(breakPopup.title, "Time for a break")
-        XCTAssertEqual(breakPopup.detail, "Rest for 10 minutes.")
+        XCTAssertEqual(breakPopup.title, "Break")
+        XCTAssertNil(breakPopup.detail, "just the face, Break and the countdown")
+        XCTAssertEqual(breakPopup.countdownTo, now.addingTimeInterval(10 * 60))
         XCTAssertNotNil(breakPopup.face, "a face, not an app icon")
         XCTAssertEqual(manager.menuBarTitle, "Break 10:00")
 
         now.addTimeInterval(10 * 60)
         manager.tick()
-        XCTAssertEqual(titles.last, "Back to work")
+        XCTAssertEqual(titles.last, "Working")
         XCTAssertEqual(manager.state?.phase, .work, "and the next work stretch has begun")
     }
 
     func testOneMinuteTestCycle() throws {
         let manager = makeManager()
         manager.startCycle(BreakCycleConfig(workMinutes: 1, breakMinutes: 1))
-        XCTAssertEqual(titles, ["Work"])
+        XCTAssertEqual(titles, ["Working"])
         now.addTimeInterval(50)
         manager.tick()
-        XCTAssertEqual(titles.last, "Break in")
+        XCTAssertEqual(titles.last, "Working")
+        XCTAssertEqual(popups.last??.sticky, true)
         now.addTimeInterval(10)
         manager.tick()
         let breakPopup = try XCTUnwrap(popups.last ?? nil)
-        XCTAssertEqual(breakPopup.detail, "Rest for 1 minute.", "singular, not '1 minutes'")
+        XCTAssertEqual(breakPopup.title, "Break")
     }
 
     func testSleepPausesTheCycle() {
@@ -262,7 +265,7 @@ final class BreakCycleManagerTests: XCTestCase {
         manager.willSleep()
         now.addTimeInterval(3 * 3600) // asleep for three hours
         manager.tick()
-        XCTAssertEqual(titles, ["Work"], "nothing pops up while asleep")
+        XCTAssertEqual(titles, ["Working"], "nothing pops up while asleep")
 
         manager.didWake()
         XCTAssertEqual(manager.menuBarTitle, "30:00", "sleep doesn't count as work")
@@ -277,7 +280,7 @@ final class BreakCycleManagerTests: XCTestCase {
         now.addTimeInterval(50)
         manager.tick()
         let last = try XCTUnwrap(popups.last ?? nil)
-        XCTAssertEqual(last.title, "Back to work in")
+        XCTAssertEqual(last.title, "Break")
         XCTAssertTrue(last.sticky)
         XCTAssertEqual(last.countdownTo, now.addingTimeInterval(10))
     }
@@ -295,7 +298,7 @@ final class BreakCycleManagerTests: XCTestCase {
         manager.tick()
         XCTAssertEqual(manager.state?.phase, .waiting, "work doesn't start by itself")
         let waiting = try XCTUnwrap(popups.last ?? nil)
-        XCTAssertEqual(waiting.title, "Break's over")
+        XCTAssertEqual(waiting.title, "Break over")
         XCTAssertTrue(waiting.sticky, "stays until you're back")
 
         // Still away an hour later: still waiting, nothing new shown.
@@ -311,7 +314,7 @@ final class BreakCycleManagerTests: XCTestCase {
         manager.tick()
         XCTAssertEqual(manager.state?.phase, .work)
         XCTAssertEqual(manager.state?.phaseEnd, now.addingTimeInterval(40 * 60))
-        XCTAssertEqual(titles.last, "Back to work")
+        XCTAssertEqual(titles.last, "Working")
         XCTAssertEqual(manager.menuBarTitle, "40:00")
     }
 
@@ -324,7 +327,7 @@ final class BreakCycleManagerTests: XCTestCase {
         now.addTimeInterval(10 * 60)
         manager.tick()
         XCTAssertEqual(manager.state?.phase, .work)
-        XCTAssertEqual(titles.last, "Back to work")
+        XCTAssertEqual(titles.last, "Working")
     }
 
     func testWaitingSurvivesARestart() {
@@ -380,15 +383,23 @@ final class BreakCycleManagerTests: XCTestCase {
         XCTAssertEqual(config, BreakCycleConfig(workSeconds: 2400, breakSeconds: 600))
     }
 
-    func testBreakPopupSaysHowLongToRest() throws {
+    func testBreakIsJustTheFaceAndACountdown() throws {
         let manager = makeManager()
         manager.startCycle(BreakCycleConfig(workMinutes: 1, breakMinutes: 1))
         now.addTimeInterval(60)
         manager.tick()
         let popup = try XCTUnwrap(popups.last ?? nil)
-        XCTAssertEqual(popup.title, "Time for a break")
-        XCTAssertEqual(popup.detail, "Rest for 1 minute.")
-        XCTAssertNil(popup.countdownTo, "left: time for a break, right: how long")
+        XCTAssertEqual(popup.title, "Break")
+        XCTAssertNotNil(popup.face)
+        XCTAssertEqual(popup.countdownTo, now.addingTimeInterval(60))
+    }
+
+    func testIslandShowsWorkOnlyWhenKept() {
+        XCTAssertTrue(BreakIslandRules.showsAmbient(phase: .work, keepWorkCountdown: true))
+        XCTAssertFalse(BreakIslandRules.showsAmbient(phase: .work, keepWorkCountdown: false),
+                       "hidden while working; it still peeks at the start, 10 min and 10 s")
+        XCTAssertTrue(BreakIslandRules.showsAmbient(phase: .onBreak, keepWorkCountdown: false), "breaks always show")
+        XCTAssertTrue(BreakIslandRules.showsAmbient(phase: .waiting, keepWorkCountdown: false))
     }
 
     func testStopClearsTheMenuBarThePopupAndTheSavedCycle() {

@@ -52,11 +52,12 @@ Sources/RemindMe/
     PersistenceController.swift  ModelContainer
   Panel/
     ReminderPanel.swift          borderless non-activating NSPanel
-    NoticePill.swift             reminders' popup: small dark pill where the panel's pill goes (face,
-                                 title, note), no buttons
-    BreakIsland.swift            the break timer's home, at the camera notch (Dynamic Island style):
-                                 small face/"Break" + countdown while a timer runs, widens with words
-                                 at start / last 10 min / last 10 s / break; IslandGeometry = pure maths
+    NoticePill.swift             reminders' popup, macOS-notification style (frosted glass, blue bell,
+                                 time in bold, "Drink water due now"), where the panel's pill goes
+    BreakIsland.swift            the break timer's home, at the camera notch: one look per state (face +
+                                 "Working" / "Break" + countdown, or "Break over · Waiting"); work
+                                 countdown kept or hidden (`BreakTimerSettings.keepWorkCountdown`);
+                                 BreakIslandRules / IslandGeometry = pure, tested
     ReminderPanelController.swift  show/hide fades, auto-hide, sizes, placement, overlays
   Views/
     PanelRootView.swift          picks the layer: live reminder > end of day > weekly > list > pill

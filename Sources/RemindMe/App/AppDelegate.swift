@@ -63,6 +63,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(withTitle: "Weekly Summary", action: #selector(showWeeklySummary), keyEquivalent: "").target = self
         if BreakCycleManager.shared.isRunning {
+            let keep = NSMenuItem(title: "Keep Work Countdown at Notch", action: #selector(toggleKeepCountdown), keyEquivalent: "")
+            keep.target = self
+            keep.state = AppSettings.breakTimer.value.keepWorkCountdown ? .on : .off
+            menu.addItem(keep)
             menu.addItem(withTitle: "Stop Break Timer", action: #selector(stopBreakTimer), keyEquivalent: "").target = self
         }
         menu.addItem(.separator())
@@ -74,6 +78,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showWeeklySummary() {
         ReminderScheduler.shared.presentWeeklySummary()
+    }
+
+    @objc private func toggleKeepCountdown() {
+        AppSettings.breakTimer.value.keepWorkCountdown.toggle()
     }
 
     @objc private func stopBreakTimer() {

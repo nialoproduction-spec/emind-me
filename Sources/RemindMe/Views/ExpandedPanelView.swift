@@ -771,6 +771,7 @@ struct SuggestionBar: View {
 struct BreakTimerSection: View {
     let theme: PanelTheme
     @ObservedObject private var breaks = BreakCycleManager.shared
+    @ObservedObject private var settings = AppSettings.breakTimer
 
     var body: some View {
         if let config = breaks.config {
@@ -816,6 +817,18 @@ struct BreakTimerSection: View {
                 .lineLimit(1)
             }
             Spacer(minLength: 4)
+
+            // Pin = the work countdown stays at the notch; unpinned it hides
+            // while you work and only peeks at the key moments.
+            Button { settings.value.keepWorkCountdown.toggle() } label: {
+                Image(systemName: settings.value.keepWorkCountdown ? "pin.fill" : "pin.slash")
+                    .font(.system(size: theme.fontSize - 1))
+                    .foregroundStyle(settings.value.keepWorkCountdown ? ReminderRowView.onColor : theme.text.opacity(0.35))
+            }
+            .buttonStyle(.plain)
+            .help(settings.value.keepWorkCountdown
+                  ? "Work countdown stays at the notch. Click to hide it while working."
+                  : "Work countdown hidden while working. Click to keep it at the notch.")
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
@@ -831,6 +844,9 @@ struct BreakTimerSection: View {
                 Button("Start over") { breaks.resume() }
             } else {
                 Button("Turn on") { breaks.resume() }
+            }
+            Button(settings.value.keepWorkCountdown ? "Hide work countdown" : "Keep work countdown at the notch") {
+                settings.value.keepWorkCountdown.toggle()
             }
             Divider()
             Button("Delete", role: .destructive) { breaks.remove() }

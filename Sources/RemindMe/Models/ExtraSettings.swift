@@ -71,6 +71,15 @@ struct GoalNudgeSettings: Codable, Equatable {
     var lastShownDayKey: String?
 }
 
+// MARK: - Break timer
+
+struct BreakTimerSettings: Codable, Equatable {
+    /// Keep the work countdown at the notch the whole time (on), or only
+    /// show it at the start, with 10 minutes left and for the last 10
+    /// seconds (off). Breaks always show.
+    var keepWorkCountdown = true
+}
+
 // MARK: - Smart features
 
 struct SmartSettings: Codable, Equatable {
@@ -120,6 +129,7 @@ enum AppSettings {
     static let snooze = PersistedSettings(key: "snoozeSettings.v1", default: SnoozeSettings())
     static let weekly = PersistedSettings(key: "weeklySummarySettings.v1", default: WeeklySummarySettings())
     static let goalNudge = PersistedSettings(key: "goalNudge.v1", default: GoalNudgeSettings())
+    static let breakTimer = PersistedSettings(key: "breakTimer.v1", default: BreakTimerSettings())
     static let smart = PersistedSettings(key: "smartSettings.v1", default: SmartSettings())
     static let categories = PersistedSettings(key: "categorySettings.v1", default: CategorySettings())
 }

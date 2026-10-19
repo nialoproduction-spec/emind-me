@@ -18,52 +18,73 @@ struct NoticeContent: Equatable {
     var id = UUID()
 }
 
-/// The popup itself: a dark rounded pill with a face, the title on the left,
-/// and a countdown or short note on the right. Deliberately no app icon.
+/// The reminder popup, in the style of a macOS notification: frosted
+/// glass, a blue bell, the time in bold and "Drink water due now" under it.
 struct NoticePillView: View {
     let content: NoticeContent
+    var shownAt = Date()
     var onTap: () -> Void = {}
 
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .short
+        return f
+    }()
+
+    static func line(for content: NoticeContent) -> String {
+        [content.title, content.detail].compactMap { $0 }.joined(separator: " ")
+    }
+
     var body: some View {
-        HStack(spacing: 10) {
-            if let face = content.face {
-                Image(nsImage: MenuBarFace.faceImage(face, span: MenuBarFace.span(of: [face]), offset: .zero))
-                    .renderingMode(.template)
-                    .foregroundStyle(.white.opacity(0.9))
-                    .frame(width: 38, height: 20)
-            }
-            Text(content.title)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-            Spacer(minLength: 12)
-            if let detail = content.detail {
-                Text(detail)
+        HStack(spacing: 12) {
+            Image(systemName: "bell.badge.fill")
+                .font(.system(size: 19, weight: .medium))
+                .symbolRenderingMode(.monochrome)
+                .foregroundStyle(Color(red: 0.25, green: 0.56, blue: 1.0))
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(Self.timeFormatter.string(from: shownAt))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                Text(Self.line(for: content))
                     .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.75))
-                    .lineLimit(1)
+                    .foregroundStyle(.white.opacity(0.62))
             }
-            if let end = content.countdownTo {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text(BreakCycleState.clockString(end.timeIntervalSince(context.date)))
-                        .font(.system(size: 14, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(.white.opacity(content.detail == nil ? 0.8 : 0.55))
-                }
-            }
+            .lineLimit(1)
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 16)
-        .frame(width: NoticePillController.size.width, height: NoticePillController.size.height)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(white: 0.07).opacity(0.97))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
-                )
+            ZStack {
+                FrostedGlass()
+                Color.black.opacity(0.18)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.16), lineWidth: 1)
+        )
+        .environment(\.colorScheme, .dark)
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
     }
+}
+
+/// The blurred, see-through backdrop macOS uses for notifications and HUDs.
+struct FrostedGlass: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .hudWindow
+        view.blendingMode = .behindWindow
+        view.state = .active
+        view.appearance = NSAppearance(named: .vibrantDark)
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
 }
 
 /// Reminders' popup (the break timer has its own, at the notch: see
@@ -74,7 +95,14 @@ struct NoticePillView: View {
 final class NoticePillController {
     static let shared = NoticePillController()
 
-    static let size = CGSize(width: 380, height: 46)
+    static let height: CGFloat = 56
+
+    /// As wide as the text needs, like the panel's own pill: 220–340 pt.
+    static func width(for content: NoticeContent) -> CGFloat {
+        let text = NoticePillView.line(for: content) as NSString
+        let textWidth = ceil(text.size(withAttributes: [.font: NSFont.systemFont(ofSize: 13)]).width)
+        return min(340, max(220, 16 + 24 + 12 + textWidth + 20))
+    }
 
     private var panel: ReminderPanel?
     private var hosting: NSHostingView<AnyView>?
@@ -88,7 +116,7 @@ final class NoticePillController {
         generation += 1
         hideTask?.cancel()
         hosting?.rootView = AnyView(NoticePillView(content: content, onTap: { [weak self] in self?.hide() }))
-        panel.setFrame(targetFrame(), display: true)
+        panel.setFrame(targetFrame(size: CGSize(width: Self.width(for: content), height: Self.height)), display: true)
         if !panel.isVisible {
             panel.alphaValue = 0
             panel.orderFrontRegardless()
@@ -131,12 +159,13 @@ final class NoticePillController {
 
     private func ensurePanel() -> ReminderPanel {
         if let panel { return panel }
-        let rect = NSRect(origin: .zero, size: Self.size)
+        let rect = NSRect(x: 0, y: 0, width: 220, height: Self.height)
         let newPanel = ReminderPanel(contentRect: rect)
         newPanel.isMovableByWindowBackground = false // a click puts it away; no dragging
         newPanel.hasShadow = true
         let view = NSHostingView(rootView: AnyView(EmptyView()))
         view.frame = rect
+        view.autoresizingMask = [.width, .height]
         newPanel.contentView = view
         panel = newPanel
         hosting = view
@@ -155,8 +184,7 @@ final class NoticePillController {
     /// Where the panel's own pill would appear (your placement setting, top
     /// right by default). If the panel is open there, just below it instead,
     /// so the popup never covers the list.
-    private func targetFrame() -> NSRect {
-        let size = Self.size
+    private func targetFrame(size: CGSize) -> NSRect {
         let panelController = ReminderPanelController.shared
         var frame = panelController.frameForNotice(size: size)
         if let open = panelController.visibleFrameOnScreen, open.intersects(frame) {

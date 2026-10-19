@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 // MARK: - Geometry
@@ -52,27 +53,36 @@ extension NSScreen {
     }
 }
 
+// MARK: - Rules
+
+@MainActor
+enum BreakIslandRules {
+    /// Whether the running timer stays at the notch between the moments it
+    /// announces. Breaks (and "Break over") always do; the work countdown
+    /// only when it's kept there.
+    static func showsAmbient(phase: BreakCycleState.Phase, keepWorkCountdown: Bool) -> Bool {
+        phase != .work || keepWorkCountdown
+    }
+
+    /// What the notch shows for the running timer's state.
+    static func content(for state: BreakCycleState) -> NoticeContent {
+        switch state.phase {
+        case .work: return NoticeContent(title: "Working", countdownTo: state.phaseEnd, face: .smug, sticky: true)
+        case .onBreak: return NoticeContent(title: "Break", countdownTo: state.phaseEnd, face: .happy, sticky: true)
+        case .waiting: return BreakCycleManager.waitingNotice
+        }
+    }
+}
+
 // MARK: - Model + view
 
 @MainActor
 final class IslandModel: ObservableObject {
-    enum Mode { case hidden, compact, expanded }
-
-    /// What the running timer shows when nothing's announced: a face (work)
-    /// or "Break", and the countdown.
-    struct Ambient: Equatable {
-        var onBreak: Bool
-        var end: Date
-        /// Break's over, waiting for the person to come back.
-        var waiting = false
-    }
-
-    @Published var mode: Mode = .hidden
+    @Published var isOpen = false
     @Published var wing: CGFloat = 0
     @Published var notch = IslandGeometry.notch(.zero)
-    @Published var ambient: Ambient?
-    /// The moment being announced ("Break in · 0:05").
-    @Published var expanded: NoticeContent?
+    /// What's showing: face + title left of the notch, detail / countdown right.
+    @Published var content: NoticeContent?
 }
 
 struct IslandView: View {
@@ -81,7 +91,7 @@ struct IslandView: View {
 
     var body: some View {
         let notch = model.notch
-        let wing = model.mode == .hidden ? 0 : model.wing
+        let wing = model.isOpen ? model.wing : 0
         ZStack(alignment: .top) {
             UnevenRoundedRectangle(
                 topLeadingRadius: 0,
@@ -92,77 +102,44 @@ struct IslandView: View {
             )
             .fill(Color.black)
             .frame(width: notch.middleWidth + wing * 2, height: notch.height)
-            .opacity(model.mode != .hidden || notch.hasNotch ? 1 : 0)
+            .opacity(model.isOpen || notch.hasNotch ? 1 : 0)
 
-            HStack(spacing: 0) {
-                left
+            if let content = model.content {
+                HStack(spacing: 0) {
+                    HStack(spacing: 7) {
+                        if let face = content.face { FaceGlyph(face: face) }
+                        Text(content.title)
+                            .font(.system(size: IslandGeometry.font, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
                     .padding(.trailing, IslandGeometry.innerGap)
                     .frame(width: wing, alignment: .trailing)
-                Color.clear.frame(width: notch.middleWidth)
-                right
+
+                    Color.clear.frame(width: notch.middleWidth)
+
+                    HStack(spacing: 7) {
+                        if let detail = content.detail {
+                            Text(detail)
+                                .font(.system(size: IslandGeometry.font))
+                                .foregroundStyle(.white.opacity(0.8))
+                        }
+                        if let end = content.countdownTo { Countdown(end: end) }
+                    }
+                    .lineLimit(1)
                     .padding(.leading, IslandGeometry.innerGap)
                     .frame(width: wing, alignment: .leading)
+                }
+                .frame(height: notch.height)
+                .clipped()
+                .opacity(model.isOpen ? 1 : 0)
+                .id("\(content.title)|\(content.detail ?? "")|\(content.countdownTo?.timeIntervalSinceReferenceDate ?? 0)")
+                .transition(.opacity)
             }
-            .frame(height: notch.height)
-            .clipped()
-            .opacity(model.mode == .hidden ? 0 : 1)
-            .id(contentKey)
-            .transition(.opacity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
-    }
-
-    private var contentKey: String {
-        if model.mode == .expanded, let content = model.expanded { return content.id.uuidString }
-        if model.ambient?.waiting == true { return "waiting" }
-        return model.ambient?.onBreak == true ? "break" : "work"
-    }
-
-    @ViewBuilder
-    private var left: some View {
-        HStack(spacing: 7) {
-            if model.mode == .expanded, let content = model.expanded {
-                if let face = content.face { FaceGlyph(face: face) }
-                Text(content.title)
-                    .font(.system(size: IslandGeometry.font, weight: .semibold))
-            } else if model.ambient?.waiting == true {
-                FaceGlyph(face: .sleepy)
-            } else if model.ambient?.onBreak == true {
-                Image(systemName: "cup.and.saucer.fill")
-                    .font(.system(size: 11, weight: .semibold))
-                Text("Break")
-                    .font(.system(size: IslandGeometry.font, weight: .semibold))
-            } else {
-                FaceGlyph(face: .smug)
-            }
-        }
-        .foregroundStyle(.white)
-        .lineLimit(1)
-    }
-
-    @ViewBuilder
-    private var right: some View {
-        HStack(spacing: 7) {
-            if model.mode == .expanded, let content = model.expanded {
-                if let detail = content.detail {
-                    Text(detail)
-                        .font(.system(size: IslandGeometry.font))
-                        .foregroundStyle(.white.opacity(0.85))
-                }
-                if let end = content.countdownTo { Countdown(end: end) }
-            } else if let ambient = model.ambient {
-                if ambient.waiting {
-                    Text("Waiting")
-                        .font(.system(size: IslandGeometry.font, weight: .semibold))
-                        .foregroundStyle(.white)
-                } else {
-                    Countdown(end: ambient.end)
-                }
-            }
-        }
-        .lineLimit(1)
     }
 }
 
@@ -218,63 +195,91 @@ final class IslandPanel: NSPanel {
 
 // MARK: - Controller
 
-/// The break timer lives here, not in the menu bar. While a timer runs, the
-/// island stays out small: a face (or "Break") left of the notch and the
-/// countdown right of it. At the moments that matter it widens with words
-/// ("Work · 40:00", "Last 10 minutes · 9:59", "Break in · 0:05",
-/// "Time for a break · Rest for 10 minutes."), then shrinks back. Small mode
-/// lets clicks through to the menu bar; a click on the wide one shrinks it.
+/// The break timer lives here, not in the menu bar: one look per state —
+/// face + "Working" + countdown, face + "Break" + countdown, or "Break over ·
+/// Waiting". The work countdown stays out if "keep at the notch" is on
+/// (Settings, the list's pin, or the menu bar's right-click menu); if off, it
+/// only peeks at the start, with 10 minutes left and for the last 10 seconds.
+/// Clicking it while working hides it (turns "keep" off).
 @MainActor
 final class BreakIslandController {
     static let shared = BreakIslandController()
 
     private var panel: IslandPanel?
     private let model = IslandModel()
-    private var collapseTask: Task<Void, Never>?
+    private let settings = AppSettings.breakTimer
+    /// The running timer, nil = none.
+    private var state: BreakCycleState?
+    /// A moment being shown on top of the usual state (for its duration).
+    private var peek: NoticeContent?
+    private var peekTask: Task<Void, Never>?
     private var generation = 0
-    private var screenObserver: NSObjectProtocol?
+    private var observers: [Any] = []
 
     private static let grow = Animation.spring(response: 0.4, dampingFraction: 0.8)
     private static let shrink = Animation.spring(response: 0.32, dampingFraction: 0.9)
 
-    private init() {}
+    private init() {
+        observers.append(settings.$value.dropFirst().receive(on: RunLoop.main).sink { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
+        })
+    }
 
-    /// The running timer (nil = none): shown small whenever nothing's announced.
+    /// The running timer (nil = none).
     func setAmbient(_ state: BreakCycleState?) {
-        let ambient = state.map {
-            IslandModel.Ambient(onBreak: $0.phase == .onBreak, end: $0.phaseEnd, waiting: $0.phase == .waiting)
-        }
-        guard ambient != model.ambient || model.mode == .hidden else { return }
-        model.ambient = ambient
-        guard model.mode != .expanded else { return } // shrinks to the new state when it's done
-        go(to: ambient == nil ? .hidden : .compact)
+        self.state = state
+        if state == nil { clearPeek() }
+        refresh()
     }
 
-    /// Announces a moment, wide, for its duration (or until replaced if sticky).
+    /// A moment to show (start, 10 minutes left, last 10 seconds, break).
     func show(_ content: NoticeContent) {
-        collapseTask?.cancel()
-        model.expanded = content
-        go(to: .expanded)
-        guard !content.sticky else { return }
-        let seconds = content.duration
-        let shown = content.id
-        collapseTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(seconds))
-            guard !Task.isCancelled, let self, self.model.expanded?.id == shown else { return }
-            self.collapse()
+        peekTask?.cancel()
+        peek = content
+        if !content.sticky {
+            let seconds = content.duration
+            let shown = content.id
+            peekTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(seconds))
+                guard !Task.isCancelled, let self, self.peek?.id == shown else { return }
+                self.peek = nil
+                self.refresh()
+            }
+        }
+        refresh()
+    }
+
+    func hide() {
+        clearPeek()
+        refresh()
+    }
+
+    private func clearPeek() {
+        peekTask?.cancel()
+        peek = nil
+    }
+
+    /// Clicked: while working, put the countdown away (and keep it away).
+    private func tapped() {
+        if state?.phase == .work {
+            settings.value.keepWorkCountdown = false
+            clearPeek()
+            refresh()
+        } else if peek != nil {
+            hide()
         }
     }
 
-    /// Back to small (or away, with no timer running).
-    func hide() { collapse() }
-
-    private func collapse() {
-        collapseTask?.cancel()
-        model.expanded = nil
-        go(to: model.ambient == nil ? .hidden : .compact)
+    /// What should be on screen right now.
+    private var wanted: NoticeContent? {
+        if let peek { return peek }
+        guard let state,
+              BreakIslandRules.showsAmbient(phase: state.phase, keepWorkCountdown: settings.value.keepWorkCountdown)
+        else { return nil }
+        return BreakIslandRules.content(for: state)
     }
 
-    private func go(to mode: IslandModel.Mode) {
+    private func refresh() {
         let panel = ensurePanel()
         generation += 1
         let mine = generation
@@ -282,36 +287,40 @@ final class BreakIslandController {
         model.notch = IslandGeometry.notch(screen?.notchSize ?? .zero)
         let screenFrame = screen?.frame ?? .zero
 
-        if mode == .hidden {
+        guard let content = wanted else {
             guard panel.isVisible else { return }
-            withAnimation(Self.shrink) { model.mode = .hidden }
+            withAnimation(Self.shrink) { model.isOpen = false }
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(380))
                 guard let self, self.generation == mine else { return }
                 self.panel?.orderOut(nil)
+                self.model.content = nil
             }
             return
         }
 
-        let wing = wingWidth(for: mode)
+        let wing = wingWidth(for: content)
         // Grow the window first (the shape is centred, so it doesn't move),
         // animate the shape, then trim the window to fit.
-        let roomy = max(wing, model.mode == .hidden ? 0 : model.wing)
+        let roomy = max(wing, model.isOpen ? model.wing : 0)
         panel.setFrame(IslandGeometry.frame(screen: screenFrame, notch: model.notch, wing: roomy), display: true)
-        panel.ignoresMouseEvents = mode == .compact
 
-        let wasHidden = !panel.isVisible || model.mode == .hidden
+        let wasClosed = !panel.isVisible || !model.isOpen
         if !panel.isVisible {
-            model.mode = .hidden
+            model.isOpen = false
             panel.orderFrontRegardless()
         }
-        if wasHidden { model.wing = wing }
+        if wasClosed {
+            model.wing = wing
+            model.content = content
+        }
         Task { @MainActor [weak self] in
-            if wasHidden { try? await Task.sleep(for: .milliseconds(20)) } // draw tucked-in first
+            if wasClosed { try? await Task.sleep(for: .milliseconds(20)) } // draw tucked-in first
             guard let self, self.generation == mine else { return }
             withAnimation(Self.grow) {
-                self.model.mode = mode
+                self.model.isOpen = true
                 self.model.wing = wing
+                self.model.content = content
             }
             try? await Task.sleep(for: .milliseconds(450))
             guard self.generation == mine else { return }
@@ -321,28 +330,19 @@ final class BreakIslandController {
 
     // MARK: - Sizing (what the text needs)
 
-    private func wingWidth(for mode: IslandModel.Mode) -> CGFloat {
+    private func wingWidth(for content: NoticeContent) -> CGFloat {
         let semibold = NSFont.systemFont(ofSize: IslandGeometry.font, weight: .semibold)
         let regular = NSFont.systemFont(ofSize: IslandGeometry.font)
         func width(_ text: String, _ font: NSFont) -> CGFloat {
             ceil((text as NSString).size(withAttributes: [.font: font]).width)
         }
-        func clock(_ end: Date) -> CGFloat {
-            let digits = NSFont.monospacedDigitSystemFont(ofSize: IslandGeometry.font, weight: .semibold)
-            return width(end.timeIntervalSinceNow >= 3600 ? "0:00:00" : "00:00", digits)
-        }
-        let faceWidth: CGFloat = 28
         let gap: CGFloat = 7
-
-        var left: CGFloat = 0
+        let left = width(content.title, semibold) + (content.face == nil ? 0 : 28 + gap)
         var right: CGFloat = 0
-        if mode == .expanded, let content = model.expanded {
-            left = width(content.title, semibold) + (content.face == nil ? 0 : faceWidth + gap)
-            if let detail = content.detail { right += width(detail, regular) }
-            if let end = content.countdownTo { right += (right > 0 ? gap : 0) + clock(end) }
-        } else if let ambient = model.ambient {
-            left = ambient.onBreak ? 14 + gap + width("Break", semibold) : faceWidth
-            right = ambient.waiting ? width("Waiting", semibold) : clock(ambient.end)
+        if let detail = content.detail { right += width(detail, regular) }
+        if let end = content.countdownTo {
+            let digits = NSFont.monospacedDigitSystemFont(ofSize: IslandGeometry.font, weight: .semibold)
+            right += (right > 0 ? gap : 0) + width(end.timeIntervalSinceNow >= 3600 ? "0:00:00" : "00:00", digits)
         }
         return IslandGeometry.wingWidth(left: left, right: right)
     }
@@ -356,19 +356,16 @@ final class BreakIslandController {
     private func ensurePanel() -> IslandPanel {
         if let panel { return panel }
         let newPanel = IslandPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 32))
-        let view = NSHostingView(rootView: IslandView(model: model, onTap: { [weak self] in self?.hide() }))
+        let view = NSHostingView(rootView: IslandView(model: model, onTap: { [weak self] in self?.tapped() }))
         view.autoresizingMask = [.width, .height]
         newPanel.contentView = view
         panel = newPanel
         // Resolution or display changes: re-fit around the notch.
-        screenObserver = NotificationCenter.default.addObserver(
+        observers.append(NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, self.model.mode != .hidden else { return }
-                self.go(to: self.model.mode)
-            }
-        }
+            Task { @MainActor in self?.refresh() }
+        })
         return newPanel
     }
 }

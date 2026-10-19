@@ -7,6 +7,7 @@ struct SmartSettingsView: View {
     @ObservedObject private var snooze = AppSettings.snooze
     @ObservedObject private var weekly = AppSettings.weekly
     @ObservedObject private var goalNudge = AppSettings.goalNudge
+    @ObservedObject private var breakTimer = AppSettings.breakTimer
     @ObservedObject private var smart = AppSettings.smart
     @ObservedObject private var categories = AppSettings.categories
     @State private var newCategory = ""
@@ -16,6 +17,8 @@ struct SmartSettingsView: View {
             snoozeSection
             Divider()
             goalSection
+            Divider()
+            breakTimerSection
             Divider()
             weeklySection
             Divider()
@@ -50,6 +53,18 @@ struct SmartSettingsView: View {
             }
         }
         Text("A habit's card shows these as buttons (up to three). The shortest is used by \(GlobalHotkeys.label(for: .snooze)) and the S key.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    // MARK: - Break timer
+
+    @ViewBuilder
+    private var breakTimerSection: some View {
+        Text("Break timer").font(.headline)
+        Toggle("Keep the work countdown at the notch", isOn: $breakTimer.value.keepWorkCountdown)
+        Text("Off: it shows when work starts, with 10 minutes left and for the last 10 seconds. Breaks always show. Click it at the notch to hide it.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)

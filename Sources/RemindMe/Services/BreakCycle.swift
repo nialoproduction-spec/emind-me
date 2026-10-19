@@ -174,10 +174,10 @@ struct BreakCycleState: Codable, Equatable {
 /// Runs the break cycle: a countdown in the menu bar plus a popup at the
 /// moments that matter. Silent: no beeps, no notification sounds.
 ///
-/// Popups (the notch island): when a work stretch starts ("Work · 40:00",
-/// counting, a few seconds), with 10 minutes left ("Last 10 minutes · 9:59"),
-/// for the last 10 seconds (stays out, counting to 0:00), when the break
-/// starts ("Time for a break · Rest for 10 minutes."), and when it ends.
+/// At the notch, one look per state: face + "Working" + countdown, face +
+/// "Break" + countdown, or "Break over · Waiting" (see BreakIsland.swift).
+/// The work countdown can be kept there or hidden; hidden, it still peeks
+/// at the start, with 10 minutes left, and for the last 10 seconds.
 ///
 /// Kept out of SwiftData on purpose: it's one small piece of live state, not
 /// a routine with a history, so it lives in UserDefaults (no model change,
@@ -354,44 +354,36 @@ final class BreakCycleManager: ObservableObject {
 
     // MARK: - Popup wording
 
-    /// "Work" on the left, the countdown on the right, for a few seconds.
+    // One look for each state, nothing else: the face + "Working" or
+    // "Break" left of the notch, the countdown right of it.
+
     static func workStartNotice(for state: BreakCycleState, afterBreak: Bool) -> NoticeContent {
-        NoticeContent(
-            title: afterBreak ? "Back to work" : "Work",
-            countdownTo: state.phaseEnd,
-            face: afterBreak ? .happy : .smug,
-            duration: 5
-        )
+        NoticeContent(title: "Working", countdownTo: state.phaseEnd, face: .smug, duration: 5)
     }
 
-    /// "Time for a break" on the left, "Rest for 5 minutes." on the right.
     static func breakStartNotice(for state: BreakCycleState) -> NoticeContent {
-        let rest = Item.durationString(TimeInterval(state.config.breakSeconds))
-        return NoticeContent(
-            title: "Time for a break",
-            detail: "Rest for \(rest).",
-            face: .sheepish,
-            duration: 8
-        )
+        NoticeContent(title: "Break", countdownTo: state.phaseEnd, face: .happy, duration: 8)
     }
 
     /// Break's over and nobody's at the Mac: stays out until they're back.
     static let waitingNotice = NoticeContent(
-        title: "Break's over",
-        detail: "Starts when you're back",
+        title: "Break over",
+        detail: "Waiting",
         face: .sleepy,
         sticky: true
     )
 
+    /// With 10 minutes left, and for the last 10 seconds (stays, counting to
+    /// 0:00): the same "Working" / "Break" look, shown again.
     static func milestoneNotice(_ milestone: BreakCycleState.Milestone, for state: BreakCycleState) -> NoticeContent {
-        switch milestone {
-        case .lastTen:
-            return NoticeContent(title: "Last 10 minutes", countdownTo: state.phaseEnd, face: .owo, duration: 6)
-        case .lastSeconds:
-            // Stays out, counting to 0:00, until the next one replaces it.
-            let title = state.phase == .onBreak ? "Back to work in" : "Break in"
-            return NoticeContent(title: title, countdownTo: state.phaseEnd, face: .squee, sticky: true)
-        }
+        let onBreak = state.phase == .onBreak
+        return NoticeContent(
+            title: onBreak ? "Break" : "Working",
+            countdownTo: state.phaseEnd,
+            face: onBreak ? .happy : .smug,
+            sticky: milestone == .lastSeconds,
+            duration: 6
+        )
     }
 
     // MARK: - Sleep: the cycle pauses while the Mac sleeps
