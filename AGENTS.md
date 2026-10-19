@@ -43,6 +43,9 @@ Sources/RemindMe/
     Insights.swift               history, streaks, weekly summary, smart suggestions (pure functions)
     AwayDetector.swift           idle time → "away" (no permissions needed)
     GlobalHotkeys.swift          ⌃⌥D / ⌃⌥S / ⌃⌥K via Carbon RegisterEventHotKey, only while a reminder shows
+    BreakCycle.swift             break timer ("rest every 40 min and take a 10 min break"): pure
+                                 BreakCycleState + BreakCycleManager; state in UserDefaults (not
+                                 SwiftData), countdown in the menu bar, pauses while the Mac sleeps
     NotificationService.swift    local UNUserNotifications
     FocusGuard.swift             full-screen / Focus detection
     PersistenceController.swift  ModelContainer
