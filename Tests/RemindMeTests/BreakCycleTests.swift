@@ -95,8 +95,8 @@ final class BreakCycleStateTests: XCTestCase {
 
     func testLastTenMinutesHeadsUpForALongWorkStretch() {
         let state = BreakCycleState.started(config, at: t0)
-        let at31 = t0.addingTimeInterval(31 * 60)
-        XCTAssertNil(state.dueMilestone(at: at31, shown: []))
+        let at29 = t0.addingTimeInterval(29 * 60)
+        XCTAssertNil(state.dueMilestone(at: at29, shown: []))
         let at30 = t0.addingTimeInterval(30 * 60)
         XCTAssertEqual(state.dueMilestone(at: at30, shown: []), .lastTen)
         XCTAssertNil(state.dueMilestone(at: at30, shown: [.lastTen]), "only once per phase")
@@ -168,7 +168,7 @@ final class BreakCycleManagerTests: XCTestCase {
         XCTAssertEqual(last.title, "Break time is almost here")
         XCTAssertTrue(last.sticky, "the last seconds stay on screen, counting")
         manager.tick()
-        XCTAssertEqual(popups.count, 4, "and it isn't re-shown every tick")
+        XCTAssertEqual(popups.count, 3, "and it isn't re-shown every tick")
 
         now.addTimeInterval(10)
         manager.tick()
