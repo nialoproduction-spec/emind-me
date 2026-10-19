@@ -51,9 +51,10 @@ Sources/RemindMe/
     PersistenceController.swift  ModelContainer
   Panel/
     ReminderPanel.swift          borderless non-activating NSPanel
-    NoticePill.swift             small dark popup (face + title + text + live countdown), no buttons,
-                                 shown where the panel's pill goes (below the panel if it's open);
-                                 used by the break timer, quiet reminders and the 8 PM goal check-in
+    NoticePill.swift             the notch "island": black shape that grows out of the camera notch,
+                                 title left of it, note/countdown right of it (IslandGeometry is the
+                                 pure layout maths); used by the break timer, quiet reminders and
+                                 the 8 PM goal check-in
     ReminderPanelController.swift  show/hide fades, auto-hide, sizes, placement, overlays
   Views/
     PanelRootView.swift          picks the layer: live reminder > end of day > weekly > list > pill

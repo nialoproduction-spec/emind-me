@@ -249,7 +249,8 @@ final class ReminderScheduler: ObservableObject {
         }
         item.nextFireDate = next
         guard !held else { return }
-        showNotice(NoticeContent(title: item.title, face: Self.quietFaces.randomElement(), duration: 6))
+        showNotice(NoticeContent(title: item.title, detail: item.scheduleSummary,
+                                 face: Self.quietFaces.randomElement(), duration: 6))
     }
 
     private static let quietFaces: [Face] = [.happy, .sheepish, .smug, .grin, .squee]

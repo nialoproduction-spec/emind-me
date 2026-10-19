@@ -140,6 +140,22 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertEqual(Item(from: habit).kind, .goal)
     }
 
+    func testIslandSitsOnTheNotch() {
+        let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        let layout = IslandGeometry.layout(screenFrame: screen, notch: CGSize(width: 185, height: 32))
+        XCTAssertTrue(layout.hasNotch)
+        XCTAssertEqual(layout.middleWidth, 185)
+        XCTAssertEqual(layout.frame.height, 32, "as tall as the notch")
+        XCTAssertEqual(layout.frame.maxY, 982, "flush with the top of the screen")
+        XCTAssertEqual(layout.frame.midX, 756, "centred on the notch")
+        XCTAssertEqual(layout.frame.width, 185 + IslandGeometry.wingWidth * 2)
+
+        let plain = IslandGeometry.layout(screenFrame: screen, notch: .zero)
+        XCTAssertFalse(plain.hasNotch)
+        XCTAssertEqual(plain.middleWidth, IslandGeometry.noNotchGap)
+        XCTAssertEqual(plain.frame.maxY, 982)
+    }
+
     func testShortcutUnitsInIntervals() {
         XCTAssertEqual(ItemParser.parse("drink water every 40m").intervalSeconds, 2400)
         XCTAssertEqual(ItemParser.parse("stretch every 2 hrs").intervalSeconds, 7200)
