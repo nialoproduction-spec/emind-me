@@ -371,7 +371,7 @@ final class UIPreviewTests: XCTestCase {
                            startPoint: .topLeading, endPoint: .bottomTrailing)
             IslandView(model: model)
                 .frame(width: width, height: 37)
-                .offset(x: (sides.left - sides.right) / 2)
+                .offset(x: (sides.right - sides.left) / 2) // puts the notch's middle at the centre
             UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 9, bottomTrailingRadius: 9,
                                    topTrailingRadius: 0, style: .continuous)
                 .fill(Color.black)
