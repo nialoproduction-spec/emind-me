@@ -499,7 +499,7 @@ final class UIPreviewTests: XCTestCase {
                     .opacity(0.35)
                 VStack(spacing: 6) {
                     KaomojiView(face: Kaomoji(eyes: .cross, mouth: .wavy, extra: .tears), color: theme.text)
-                        .frame(width: 128, height: 64)
+                        .frame(width: 110, height: 76)
                     Text("Tell my family I loved them.")
                         .font(.system(size: theme.fontSize - 2, weight: .semibold).italic())
                         .foregroundStyle(theme.text.opacity(0.9))
@@ -516,7 +516,7 @@ final class UIPreviewTests: XCTestCase {
                     .fill(theme.background.opacity(theme.backgroundOpacity))
                 VStack(spacing: 6) {
                     KaomojiView(face: Kaomoji(eyes: .content, mouth: .smile, extra: .tears), color: theme.text)
-                        .frame(width: 128, height: 64)
+                        .frame(width: 110, height: 76)
                     Text("Drink water").font(theme.titleFont).foregroundStyle(theme.text)
                     Text("Sayonara.")
                         .font(.system(size: theme.fontSize - 2, weight: .semibold).italic())

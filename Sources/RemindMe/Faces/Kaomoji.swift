@@ -101,6 +101,9 @@ struct Kaomoji: Hashable {
     // MARK: - Drawing
 
     static let canvas = CGSize(width: 200, height: 104)
+    /// The part of the canvas a face actually uses (it's drawn close
+    /// together), so it fills its frame instead of floating in the middle.
+    static let viewBox = CGRect(x: 26, y: 0, width: 148, height: 104)
     static let lineWidth: CGFloat = 4.5
 
     struct Stroke {
@@ -435,10 +438,12 @@ struct KaomojiView: View {
 
     var body: some View {
         Canvas { context, size in
-            let scale = min(size.width / Kaomoji.canvas.width, size.height / Kaomoji.canvas.height)
-            let drawn = CGSize(width: Kaomoji.canvas.width * scale, height: Kaomoji.canvas.height * scale)
+            let box = Kaomoji.viewBox
+            let scale = min(size.width / box.width, size.height / box.height)
+            let drawn = CGSize(width: box.width * scale, height: box.height * scale)
             context.translateBy(x: (size.width - drawn.width) / 2, y: (size.height - drawn.height) / 2)
             context.scaleBy(x: scale, y: scale)
+            context.translateBy(x: -box.minX, y: -box.minY)
             let style = StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
             for stroke in face.strokes {
                 if stroke.filled {
@@ -448,7 +453,7 @@ struct KaomojiView: View {
                 }
             }
         }
-        .aspectRatio(Kaomoji.canvas.width / Kaomoji.canvas.height, contentMode: .fit)
+        .aspectRatio(Kaomoji.viewBox.width / Kaomoji.viewBox.height, contentMode: .fit)
     }
 }
 

@@ -57,7 +57,7 @@ struct NoticePillView: View {
         ZStack {
             VStack(spacing: 6) {
                 LivelyKaomojiView(face: face, color: theme.text)
-                    .frame(width: 128, height: 64)
+                    .frame(width: 110, height: 76)
 
                 Text(content.title)
                     .font(theme.titleFont)
@@ -185,7 +185,7 @@ final class NoticePillController {
     static let shared = NoticePillController()
 
     /// The habit card's width; shorter, with no buttons.
-    static let size = CGSize(width: ReminderPanelController.liveReminderSize.width, height: 150)
+    static let size = CGSize(width: ReminderPanelController.liveReminderSize.width, height: 164)
 
     private var panel: ReminderPanel?
     private var hosting: NSHostingView<AnyView>?
