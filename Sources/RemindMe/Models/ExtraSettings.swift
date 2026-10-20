@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -90,11 +91,70 @@ struct ReminderPopupSettings: Codable, Equatable {
 
 // MARK: - Break timer
 
+/// A plain sRGB colour that can be saved.
+struct RGBColor: Codable, Equatable, Hashable {
+    var r: Double
+    var g: Double
+    var b: Double
+
+    init(r: Double, g: Double, b: Double) {
+        self.r = r; self.g = g; self.b = b
+    }
+
+    init(_ color: Color) {
+        let ns = NSColor(color).usingColorSpace(.sRGB) ?? .black
+        self.init(r: Double(ns.redComponent), g: Double(ns.greenComponent), b: Double(ns.blueComponent))
+    }
+
+    var color: Color { Color(.sRGB, red: r, green: g, blue: b) }
+
+    /// Light enough that text on it should be dark.
+    var isLight: Bool { 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.55 }
+
+    static let black = RGBColor(r: 0, g: 0, b: 0)
+    static let white = RGBColor(r: 1, g: 1, b: 1)
+    static let ink = RGBColor(r: 0.09, g: 0.11, b: 0.15)
+    /// The soft blue for breaks (#C5D2E5).
+    static let breakBlue = RGBColor(r: 0.773, g: 0.824, b: 0.898)
+    static let awayRed = RGBColor(r: 1.0, g: 0.27, b: 0.23)
+
+    /// Quick picks in Settings.
+    static let swatches: [RGBColor] = [
+        .black,
+        RGBColor(r: 0.17, g: 0.17, b: 0.19), // graphite
+        .breakBlue,
+        RGBColor(r: 0.72, g: 0.89, b: 0.80), // mint
+        RGBColor(r: 0.98, g: 0.81, b: 0.69), // peach
+        RGBColor(r: 0.83, g: 0.78, b: 0.96), // lavender
+        RGBColor(r: 0.11, g: 0.19, b: 0.38), // navy
+        .awayRed,
+    ]
+}
+
 struct BreakTimerSettings: Codable, Equatable {
     /// Keep the work countdown at the notch the whole time (on), or only
     /// show it at the start, with 10 minutes left and for the last 10
     /// seconds (off). Breaks always show.
     var keepWorkCountdown = true
+    /// The notch's colour while working.
+    var workColor = RGBColor.black
+    /// The notch's colour on a break.
+    var breakColor = RGBColor.breakBlue
+    /// The colour of the time-away count after a break.
+    var awayColor = RGBColor.awayRed
+
+    init() {}
+
+    private enum CodingKeys: String, CodingKey { case keepWorkCountdown, workColor, breakColor, awayColor }
+
+    /// Settings saved before colours existed still load (and keep their choice).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        keepWorkCountdown = try c.decodeIfPresent(Bool.self, forKey: .keepWorkCountdown) ?? true
+        workColor = try c.decodeIfPresent(RGBColor.self, forKey: .workColor) ?? .black
+        breakColor = try c.decodeIfPresent(RGBColor.self, forKey: .breakColor) ?? .breakBlue
+        awayColor = try c.decodeIfPresent(RGBColor.self, forKey: .awayColor) ?? .awayRed
+    }
 }
 
 // MARK: - Smart features

@@ -10,9 +10,13 @@ struct NoticeContent: Equatable {
     /// Right-hand live countdown to this moment. It's drawn from the
     /// absolute date each second, so it can never drift (rule 3).
     var countdownTo: Date? = nil
+    /// Counts up from this moment instead ("+3:12"): time away after a break.
+    var countUpFrom: Date? = nil
     var face: Face? = nil
     /// The reminder's category ("Health"), shown as a coloured tag.
     var category: String? = nil
+    /// Which colours the notch uses for it (work, break, away).
+    var tone: IslandTone? = nil
     /// Stays on screen until replaced or hidden, instead of fading after
     /// `duration` seconds.
     var sticky = false

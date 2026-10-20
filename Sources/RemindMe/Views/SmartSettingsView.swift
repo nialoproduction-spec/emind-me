@@ -98,6 +98,54 @@ struct SmartSettingsView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
+
+        Text("Notch colours").font(.subheadline.weight(.semibold))
+        colorRow("Working", $breakTimer.value.workColor)
+        colorRow("Break", $breakTimer.value.breakColor)
+        colorRow("Time away", $breakTimer.value.awayColor)
+        HStack {
+            Text("Time away counts up after a break if you're not back yet.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            Button("Reset") {
+                breakTimer.value.workColor = .black
+                breakTimer.value.breakColor = .breakBlue
+                breakTimer.value.awayColor = .awayRed
+            }
+            .controlSize(.small)
+        }
+    }
+
+    /// Quick colour picks, plus the system picker for anything else.
+    private func colorRow(_ label: String, _ value: Binding<RGBColor>) -> some View {
+        HStack(spacing: 5) {
+            Text(label)
+                .frame(width: 70, alignment: .leading)
+            ForEach(RGBColor.swatches, id: \.self) { swatch in
+                Button { value.wrappedValue = swatch } label: {
+                    Circle()
+                        .fill(swatch.color)
+                        .frame(width: 16, height: 16)
+                        .overlay(Circle().strokeBorder(Color.primary.opacity(0.25), lineWidth: 0.5))
+                        .overlay(
+                            Circle()
+                                .strokeBorder(Color.accentColor, lineWidth: 2)
+                                .padding(-3)
+                                .opacity(value.wrappedValue == swatch ? 1 : 0)
+                        )
+                }
+                .buttonStyle(.plain)
+                .padding(3)
+            }
+            ColorPicker("", selection: Binding(
+                get: { value.wrappedValue.color },
+                set: { value.wrappedValue = RGBColor($0) }
+            ), supportsOpacity: false)
+            .labelsHidden()
+            .help("Any colour")
+        }
     }
 
     // MARK: - Goal check-in

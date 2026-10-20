@@ -152,6 +152,15 @@ struct BreakCycleState: Codable, Equatable {
     }
 
     /// "9:42" — rounds up, so it reads 0:01 until the moment it ends.
+    /// "+3:12": time counted up, whole seconds.
+    static func elapsedString(_ seconds: TimeInterval) -> String {
+        let total = Int(max(0, seconds).rounded(.down))
+        if total >= 3600 {
+            return String(format: "+%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
+        }
+        return String(format: "+%d:%02d", total / 60, total % 60)
+    }
+
     static func clockString(_ seconds: TimeInterval) -> String {
         let total = Int(max(0, seconds).rounded(.up))
         if total >= 3600 {
@@ -339,7 +348,7 @@ final class BreakCycleManager: ObservableObject {
             switch event {
             case .breakStarted: notice(Self.breakStartNotice(for: current))
             case .breakEnded: notice(Self.workStartNotice(for: current, afterBreak: true))
-            case .waitingForYou: notice(Self.waitingNotice)
+            case .waitingForYou: notice(Self.waitingNotice(for: current))
             }
         } else if let milestone = current.dueMilestone(at: now, shown: shown) {
             shown.insert(milestone)
@@ -358,20 +367,24 @@ final class BreakCycleManager: ObservableObject {
     // "Break" left of the notch, the countdown right of it.
 
     static func workStartNotice(for state: BreakCycleState, afterBreak: Bool) -> NoticeContent {
-        NoticeContent(title: "Working", countdownTo: state.phaseEnd, face: .smug, duration: 5)
+        NoticeContent(title: "Working", countdownTo: state.phaseEnd, face: .smug, tone: .work, duration: 5)
     }
 
     static func breakStartNotice(for state: BreakCycleState) -> NoticeContent {
-        NoticeContent(title: "Break", countdownTo: state.phaseEnd, face: .happy, duration: 8)
+        NoticeContent(title: "Break", countdownTo: state.phaseEnd, face: .happy, tone: .onBreak, duration: 8)
     }
 
-    /// Break's over and nobody's at the Mac: stays out until they're back.
-    static let waitingNotice = NoticeContent(
-        title: "Break over",
-        detail: "Waiting",
-        face: .sleepy,
-        sticky: true
-    )
+    /// Break's over and nobody's at the Mac: stays out, counting the time
+    /// away in red ("+3:12"), until they're back.
+    static func waitingNotice(for state: BreakCycleState) -> NoticeContent {
+        NoticeContent(
+            title: "Break over",
+            countUpFrom: state.phaseEnd,
+            face: .sleepy,
+            tone: .away,
+            sticky: true
+        )
+    }
 
     /// With 10 minutes left, and for the last 10 seconds (stays, counting to
     /// 0:00): the same "Working" / "Break" look, shown again.
@@ -381,6 +394,7 @@ final class BreakCycleManager: ObservableObject {
             title: onBreak ? "Break" : "Working",
             countdownTo: state.phaseEnd,
             face: onBreak ? .happy : .smug,
+            tone: onBreak ? .onBreak : .work,
             sticky: milestone == .lastSeconds,
             duration: 6
         )

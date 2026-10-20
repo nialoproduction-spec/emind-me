@@ -58,6 +58,8 @@ Sources/RemindMe/
     BreakIsland.swift            the break timer's home, at the camera notch: one look per state (face +
                                  "Working" / "Break" + countdown, or "Break over · Waiting"); work
                                  countdown kept or hidden (`BreakTimerSettings.keepWorkCountdown`);
+                                 colours per state (`IslandPalette`: work black, break #C5D2E5, time
+                                 away counted up in red), set in Settings → Smart;
                                  BreakIslandRules / IslandGeometry = pure, tested
     ReminderPanelController.swift  show/hide fades, auto-hide, sizes, placement, overlays
   Views/

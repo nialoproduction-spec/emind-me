@@ -55,8 +55,35 @@ extension NSScreen {
 
 // MARK: - Rules
 
+/// Which colours the notch uses.
+enum IslandTone: String, Codable { case work, onBreak, away }
+
+/// The notch's colours for one state: the shape, its text, and the time.
+struct IslandPalette: Equatable {
+    var background: RGBColor
+    var text: RGBColor
+    var time: RGBColor
+}
+
 @MainActor
 enum BreakIslandRules {
+    /// Working: the work colour (black by default). Break: the break colour
+    /// (soft blue). Away after a break: the work colour with the time away in
+    /// the away colour (red). Text turns dark on light colours.
+    nonisolated static func palette(for tone: IslandTone, settings: BreakTimerSettings) -> IslandPalette {
+        func onTop(_ background: RGBColor) -> RGBColor { background.isLight ? .ink : .white }
+        switch tone {
+        case .work:
+            let text = onTop(settings.workColor)
+            return IslandPalette(background: settings.workColor, text: text, time: text)
+        case .onBreak:
+            let text = onTop(settings.breakColor)
+            return IslandPalette(background: settings.breakColor, text: text, time: text)
+        case .away:
+            return IslandPalette(background: settings.workColor, text: onTop(settings.workColor), time: settings.awayColor)
+        }
+    }
+
     /// Whether the running timer stays at the notch between the moments it
     /// announces. Breaks (and "Break over") always do; the work countdown
     /// only when it's kept there.
@@ -67,9 +94,12 @@ enum BreakIslandRules {
     /// What the notch shows for the running timer's state.
     static func content(for state: BreakCycleState) -> NoticeContent {
         switch state.phase {
-        case .work: return NoticeContent(title: "Working", countdownTo: state.phaseEnd, face: .smug, sticky: true)
-        case .onBreak: return NoticeContent(title: "Break", countdownTo: state.phaseEnd, face: .happy, sticky: true)
-        case .waiting: return BreakCycleManager.waitingNotice
+        case .work:
+            return NoticeContent(title: "Working", countdownTo: state.phaseEnd, face: .smug, tone: .work, sticky: true)
+        case .onBreak:
+            return NoticeContent(title: "Break", countdownTo: state.phaseEnd, face: .happy, tone: .onBreak, sticky: true)
+        case .waiting:
+            return BreakCycleManager.waitingNotice(for: state)
         }
     }
 }
@@ -83,6 +113,7 @@ final class IslandModel: ObservableObject {
     @Published var notch = IslandGeometry.notch(.zero)
     /// What's showing: face + title left of the notch, detail / countdown right.
     @Published var content: NoticeContent?
+    @Published var palette = BreakIslandRules.palette(for: .work, settings: BreakTimerSettings())
 }
 
 struct IslandView: View {
@@ -100,7 +131,7 @@ struct IslandView: View {
                 topTrailingRadius: 0,
                 style: .continuous
             )
-            .fill(Color.black)
+            .fill(model.palette.background.color)
             .frame(width: notch.middleWidth + wing * 2, height: notch.height)
             .opacity(model.isOpen || notch.hasNotch ? 1 : 0)
 
@@ -111,7 +142,7 @@ struct IslandView: View {
                         Text(content.title)
                             .font(.system(size: IslandGeometry.font, weight: .semibold))
                     }
-                    .foregroundStyle(.white)
+                    .foregroundStyle(model.palette.text.color)
                     .lineLimit(1)
                     .padding(.trailing, IslandGeometry.innerGap)
                     .frame(width: wing, alignment: .trailing)
@@ -122,9 +153,10 @@ struct IslandView: View {
                         if let detail = content.detail {
                             Text(detail)
                                 .font(.system(size: IslandGeometry.font))
-                                .foregroundStyle(.white.opacity(0.8))
+                                .foregroundStyle(model.palette.text.color.opacity(0.8))
                         }
-                        if let end = content.countdownTo { Countdown(end: end) }
+                        if let end = content.countdownTo { Countdown(end: end, color: model.palette.time.color) }
+                        if let start = content.countUpFrom { CountUp(start: start, color: model.palette.time.color) }
                     }
                     .lineLimit(1)
                     .padding(.leading, IslandGeometry.innerGap)
@@ -151,17 +183,30 @@ private struct FaceGlyph: View {
             .resizable()
             .aspectRatio(contentMode: .fit)
             .frame(height: 11)
-            .foregroundStyle(.white.opacity(0.95))
     }
 }
 
 private struct Countdown: View {
     let end: Date
+    let color: Color
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             Text(BreakCycleState.clockString(end.timeIntervalSince(context.date)))
                 .font(.system(size: IslandGeometry.font, weight: .semibold).monospacedDigit())
-                .foregroundStyle(.white)
+                .foregroundStyle(color)
+        }
+    }
+}
+
+/// "+3:12", counting up: time away after a break.
+private struct CountUp: View {
+    let start: Date
+    let color: Color
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            Text(BreakCycleState.elapsedString(context.date.timeIntervalSince(start)))
+                .font(.system(size: IslandGeometry.font, weight: .semibold).monospacedDigit())
+                .foregroundStyle(color)
         }
     }
 }
@@ -310,9 +355,11 @@ final class BreakIslandController {
             model.isOpen = false
             panel.orderFrontRegardless()
         }
+        let palette = BreakIslandRules.palette(for: content.tone ?? .work, settings: settings.value)
         if wasClosed {
             model.wing = wing
             model.content = content
+            model.palette = palette
         }
         Task { @MainActor [weak self] in
             if wasClosed { try? await Task.sleep(for: .milliseconds(20)) } // draw tucked-in first
@@ -321,6 +368,7 @@ final class BreakIslandController {
                 self.model.isOpen = true
                 self.model.wing = wing
                 self.model.content = content
+                self.model.palette = palette
             }
             try? await Task.sleep(for: .milliseconds(450))
             guard self.generation == mine else { return }
@@ -340,9 +388,12 @@ final class BreakIslandController {
         let left = width(content.title, semibold) + (content.face == nil ? 0 : 28 + gap)
         var right: CGFloat = 0
         if let detail = content.detail { right += width(detail, regular) }
+        let digits = NSFont.monospacedDigitSystemFont(ofSize: IslandGeometry.font, weight: .semibold)
         if let end = content.countdownTo {
-            let digits = NSFont.monospacedDigitSystemFont(ofSize: IslandGeometry.font, weight: .semibold)
             right += (right > 0 ? gap : 0) + width(end.timeIntervalSinceNow >= 3600 ? "0:00:00" : "00:00", digits)
+        }
+        if content.countUpFrom != nil {
+            right += (right > 0 ? gap : 0) + width("+0:00:00", digits)
         }
         return IslandGeometry.wingWidth(left: left, right: right)
     }

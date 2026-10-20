@@ -299,6 +299,8 @@ final class BreakCycleManagerTests: XCTestCase {
         XCTAssertEqual(manager.state?.phase, .waiting, "work doesn't start by itself")
         let waiting = try XCTUnwrap(popups.last ?? nil)
         XCTAssertEqual(waiting.title, "Break over")
+        XCTAssertEqual(waiting.countUpFrom, now, "counts up the time away from the end of the break")
+        XCTAssertEqual(waiting.tone, .away)
         XCTAssertTrue(waiting.sticky, "stays until you're back")
 
         // Still away an hour later: still waiting, nothing new shown.
@@ -392,6 +394,40 @@ final class BreakCycleManagerTests: XCTestCase {
         XCTAssertEqual(popup.title, "Break")
         XCTAssertNotNil(popup.face)
         XCTAssertEqual(popup.countdownTo, now.addingTimeInterval(60))
+    }
+
+    func testNotchColours() {
+        let defaults = BreakTimerSettings()
+        let work = BreakIslandRules.palette(for: .work, settings: defaults)
+        XCTAssertEqual(work.background, .black, "black while working")
+        XCTAssertEqual(work.text, .white)
+
+        let rest = BreakIslandRules.palette(for: .onBreak, settings: defaults)
+        XCTAssertEqual(rest.background, .breakBlue, "soft blue on a break")
+        XCTAssertEqual(rest.text, .ink, "dark text on a light colour")
+
+        let away = BreakIslandRules.palette(for: .away, settings: defaults)
+        XCTAssertEqual(away.time, .awayRed, "time away in red")
+        XCTAssertEqual(away.background, .black)
+
+        var custom = defaults
+        custom.breakColor = RGBColor(r: 0.11, g: 0.19, b: 0.38)
+        XCTAssertEqual(BreakIslandRules.palette(for: .onBreak, settings: custom).text, .white, "light text on a dark colour")
+    }
+
+    func testOldBreakTimerSettingsStillLoad() throws {
+        let old = #"{"keepWorkCountdown":false}"#.data(using: .utf8)!
+        let settings = try JSONDecoder().decode(BreakTimerSettings.self, from: old)
+        XCTAssertFalse(settings.keepWorkCountdown, "the choice is kept")
+        XCTAssertEqual(settings.breakColor, .breakBlue)
+        let roundTrip = try JSONDecoder().decode(BreakTimerSettings.self, from: JSONEncoder().encode(settings))
+        XCTAssertEqual(roundTrip, settings)
+    }
+
+    func testTimeAwayString() {
+        XCTAssertEqual(BreakCycleState.elapsedString(0), "+0:00")
+        XCTAssertEqual(BreakCycleState.elapsedString(65.9), "+1:05")
+        XCTAssertEqual(BreakCycleState.elapsedString(3725), "+1:02:05")
     }
 
     func testIslandShowsWorkOnlyWhenKept() {
