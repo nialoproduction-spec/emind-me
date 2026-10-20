@@ -93,8 +93,8 @@ enum BreakIslandRules {
 
     /// On a break the title gently cycles through these, one every few
     /// seconds, so the break feels like a break.
-    static let breakPrompts = ["Break", "Breathe in", "Look far away", "Stretch a bit",
-                               "Sip some water", "Rest your eyes", "Unclench your jaw"]
+    static let breakPrompts = ["Break", "Breathe in", "Look away", "Stretch",
+                               "Sip water", "Rest your eyes", "Relax your jaw"]
     static let promptSeconds: TimeInterval = 9
 
     /// Whether the running timer stays at the notch between the moments it
