@@ -45,7 +45,7 @@ struct NoticePillView: View {
 
     @ObservedObject private var themeStore = ThemeStore.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var face = Kaomoji.random([.happy, .happy, .love, .calm, .shocked, .silly, .cool].randomElement()!)
+    @State private var face = Kaomoji.random([.happy, .happy, .love, .calm, .shocked, .silly, .cool, .pleading, .nervous].randomElement()!)
     @State private var lastWords: String?
     /// Second line while it goes ("accepts fate").
     @State private var aside: String?

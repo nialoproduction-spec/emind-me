@@ -11,12 +11,15 @@ enum IslandGeometry {
     static let noNotchGap: CGFloat = 16
     static let noNotchHeight: CGFloat = 32
     static let cornerRadius: CGFloat = 10
-    /// Space between the text and the notch, and at the outer end.
-    static let innerGap: CGFloat = 10
-    static let outerPadding: CGFloat = 12
-    static let minWing: CGFloat = 44
-    static let maxWing: CGFloat = 200
+    /// Space between the content and the notch, and at the outer end.
+    static let innerGap: CGFloat = 8
+    static let outerPadding: CGFloat = 10
+    static let minWing: CGFloat = 34
+    static let maxWing: CGFloat = 180
     static let font: CGFloat = 13
+    /// The face's size next to the notch (the menu bar face's shape).
+    static let faceHeight: CGFloat = 13
+    static let faceWidth: CGFloat = 25
 
     struct Notch: Equatable {
         var middleWidth: CGFloat
@@ -31,16 +34,18 @@ enum IslandGeometry {
                      hasNotch: hasNotch)
     }
 
-    /// Each side is as wide as the wider side's content needs (so the shape
-    /// stays centred on the notch), and the text sits right next to the notch.
-    static func wingWidth(left: CGFloat, right: CGFloat) -> CGFloat {
-        min(maxWing, max(minWing, max(left, right) + innerGap + outerPadding))
+    /// One side's width: just what its own content needs (the two sides
+    /// don't have to match), with the content right next to the notch.
+    static func side(_ content: CGFloat) -> CGFloat {
+        min(maxWing, max(minWing, content + innerGap + outerPadding))
     }
 
-    /// The window: centred on the screen's top edge, as tall as the notch.
-    static func frame(screen: CGRect, notch: Notch, wing: CGFloat) -> CGRect {
-        let width = notch.middleWidth + wing * 2
-        return CGRect(x: screen.midX - width / 2, y: screen.maxY - notch.height, width: width, height: notch.height)
+    /// The window: `left` points out from the notch's left edge, `right`
+    /// from its right edge, as tall as the notch, at the top of the screen.
+    static func frame(screen: CGRect, notch: Notch, left: CGFloat, right: CGFloat) -> CGRect {
+        let notchLeft = screen.midX - notch.middleWidth / 2
+        return CGRect(x: notchLeft - left, y: screen.maxY - notch.height,
+                      width: left + notch.middleWidth + right, height: notch.height)
     }
 }
 
@@ -91,12 +96,6 @@ enum BreakIslandRules {
         }
     }
 
-    /// On a break the title gently cycles through these, one every few
-    /// seconds, so the break feels like a break.
-    static let breakPrompts = ["Break", "Breathe in", "Look away", "Stretch",
-                               "Sip water", "Rest your eyes", "Relax your jaw"]
-    static let promptSeconds: TimeInterval = 9
-
     /// Whether the running timer stays at the notch between the moments it
     /// announces. Breaks (and "Break over") always do; the work countdown
     /// only when it's kept there.
@@ -104,13 +103,15 @@ enum BreakIslandRules {
         phase != .work || keepWorkCountdown
     }
 
-    /// What the notch shows for the running timer's state.
+    /// What the notch shows for the running timer between moments: just
+    /// the face and the time, as small as it gets. The words ("Working",
+    /// "Break") come with the moments themselves.
     static func content(for state: BreakCycleState) -> NoticeContent {
         switch state.phase {
         case .work:
-            return NoticeContent(title: "Working", countdownTo: state.phaseEnd, face: .smug, tone: .work, sticky: true)
+            return NoticeContent(title: "", countdownTo: state.phaseEnd, face: .smug, tone: .work, sticky: true)
         case .onBreak:
-            return NoticeContent(title: "Break", countdownTo: state.phaseEnd, face: .sleepy, tone: .onBreak, sticky: true)
+            return NoticeContent(title: "", countdownTo: state.phaseEnd, face: .sleepy, tone: .onBreak, sticky: true)
         case .waiting:
             return BreakCycleManager.waitingNotice(for: state)
         }
@@ -122,7 +123,12 @@ enum BreakIslandRules {
 @MainActor
 final class IslandModel: ObservableObject {
     @Published var isOpen = false
-    @Published var wing: CGFloat = 0
+    /// How far each side reaches out from the notch.
+    @Published var leftWing: CGFloat = 0
+    @Published var rightWing: CGFloat = 0
+    /// Room in the window to the left of the notch (≥ `leftWing` while it
+    /// grows or shrinks), so the shape can be placed around the notch.
+    @Published var roomLeft: CGFloat = 0
     @Published var notch = IslandGeometry.notch(.zero)
     /// What's showing: face + title left of the notch, detail / countdown right.
     @Published var content: NoticeContent?
@@ -138,29 +144,31 @@ struct IslandView: View {
 
     var body: some View {
         let notch = model.notch
-        let wing = model.isOpen ? model.wing : 0
+        let left = model.isOpen ? model.leftWing : 0
+        let right = model.isOpen ? model.rightWing : 0
+        let x = model.roomLeft - left
         let palette = model.palette
         let onBreak = model.content?.tone == .onBreak
-        ZStack(alignment: .top) {
-            IslandSurface(palette: palette, wing: wing, middle: notch.middleWidth, breathing: onBreak)
-                .frame(width: notch.middleWidth + wing * 2, height: notch.height)
+        ZStack(alignment: .topLeading) {
+            IslandSurface(palette: palette, leftWidth: left, middle: notch.middleWidth, breathing: onBreak)
+                .frame(width: left + notch.middleWidth + right, height: notch.height)
                 .opacity(model.isOpen || notch.hasNotch ? 1 : 0)
+                .offset(x: x)
 
             if let content = model.content {
                 HStack(spacing: 0) {
                     HStack(spacing: 7) {
                         if let face = content.face { IslandFace(face: face, tone: content.tone ?? .work) }
-                        if onBreak && content.title == "Break" {
-                            BreakPrompt()
-                        } else {
+                        if !content.title.isEmpty {
                             Text(content.title)
                                 .font(.system(size: IslandGeometry.font, weight: .semibold, design: .rounded))
+                                .fixedSize()
                         }
                     }
                     .foregroundStyle(palette.leftText.color)
                     .lineLimit(1)
                     .padding(.trailing, IslandGeometry.innerGap)
-                    .frame(width: wing, alignment: .trailing)
+                    .frame(width: left, alignment: .trailing)
 
                     Color.clear.frame(width: notch.middleWidth)
 
@@ -169,39 +177,26 @@ struct IslandView: View {
                             Text(detail)
                                 .font(.system(size: IslandGeometry.font, design: .rounded))
                                 .foregroundStyle(palette.text.color.opacity(0.8))
+                                .fixedSize()
                         }
                         if let end = content.countdownTo { Countdown(end: end, color: palette.time.color) }
                         if let start = content.countUpFrom { CountUp(start: start, color: palette.time.color) }
                     }
                     .lineLimit(1)
                     .padding(.leading, IslandGeometry.innerGap)
-                    .frame(width: wing, alignment: .leading)
+                    .frame(width: right, alignment: .leading)
                 }
                 .frame(height: notch.height)
+                .clipped()
                 .opacity(model.isOpen ? 1 : 0)
+                .offset(x: x)
                 .id("\(content.title)|\(content.detail ?? "")|\(content.countdownTo?.timeIntervalSinceReferenceDate ?? 0)")
                 .transition(.opacity)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
-    }
-}
-
-/// "Break", then "Breathe in", "Look far away"… one every few seconds,
-/// fading from one to the next.
-private struct BreakPrompt: View {
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: BreakIslandRules.promptSeconds)) { context in
-            let prompts = BreakIslandRules.breakPrompts
-            let index = Int(context.date.timeIntervalSinceReferenceDate / BreakIslandRules.promptSeconds) % prompts.count
-            Text(prompts[index])
-                .font(.system(size: IslandGeometry.font, weight: .semibold, design: .rounded))
-                .id(index)
-                .transition(.opacity)
-                .animation(.easeInOut(duration: 0.5), value: index)
-        }
     }
 }
 
@@ -211,7 +206,8 @@ private struct BreakPrompt: View {
 /// Away after a break, the left side runs red and pulses.
 struct IslandSurface: View {
     let palette: IslandPalette
-    let wing: CGFloat
+    /// The left side's width (the away alarm colours it).
+    let leftWidth: CGFloat
     let middle: CGFloat
     var breathing = false
 
@@ -238,7 +234,7 @@ struct IslandSurface: View {
             if let alarm = palette.leftWing {
                 Rectangle()
                     .fill(alarm.color.opacity(pulse ? 1 : 0.62))
-                    .frame(width: wing + middle / 2)
+                    .frame(width: leftWidth + middle / 2)
                     .onAppear {
                         guard !reduceMotion else { pulse = true; return }
                         withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { pulse = true }
@@ -342,7 +338,7 @@ private struct FaceGlyph: View {
             .renderingMode(.template)
             .resizable()
             .aspectRatio(contentMode: .fit)
-            .frame(height: 13)
+            .frame(height: IslandGeometry.faceHeight)
     }
 }
 
@@ -504,11 +500,15 @@ final class BreakIslandController {
             return
         }
 
-        let wing = Self.wingWidth(for: content)
-        // Grow the window first (the shape is centred, so it doesn't move),
-        // animate the shape, then trim the window to fit.
-        let roomy = max(wing, model.isOpen ? model.wing : 0)
-        panel.setFrame(IslandGeometry.frame(screen: screenFrame, notch: model.notch, wing: roomy), display: true)
+        let sides = Self.sides(for: content)
+        // Make room in the window for the bigger of old and new on each side
+        // (the shape stays put around the notch), animate, then trim.
+        let roomLeft = max(sides.left, model.isOpen ? model.leftWing : 0)
+        let roomRight = max(sides.right, model.isOpen ? model.rightWing : 0)
+        panel.disableScreenUpdatesUntilFlush()
+        model.roomLeft = roomLeft
+        panel.setFrame(IslandGeometry.frame(screen: screenFrame, notch: model.notch, left: roomLeft, right: roomRight),
+                       display: true)
 
         let wasClosed = !panel.isVisible || !model.isOpen
         if !panel.isVisible {
@@ -517,7 +517,8 @@ final class BreakIslandController {
         }
         let palette = BreakIslandRules.palette(for: content.tone ?? .work, settings: settings.value)
         if wasClosed {
-            model.wing = wing
+            model.leftWing = sides.left
+            model.rightWing = sides.right
             model.content = content
             model.palette = palette
         }
@@ -526,37 +527,50 @@ final class BreakIslandController {
             guard let self, self.generation == mine else { return }
             withAnimation(Self.grow) {
                 self.model.isOpen = true
-                self.model.wing = wing
+                self.model.leftWing = sides.left
+                self.model.rightWing = sides.right
                 self.model.content = content
                 self.model.palette = palette
             }
             try? await Task.sleep(for: .milliseconds(450))
-            guard self.generation == mine else { return }
-            self.panel?.setFrame(IslandGeometry.frame(screen: screenFrame, notch: self.model.notch, wing: wing), display: true)
+            guard self.generation == mine, let panel = self.panel else { return }
+            panel.disableScreenUpdatesUntilFlush()
+            self.model.roomLeft = sides.left
+            panel.setFrame(IslandGeometry.frame(screen: screenFrame, notch: self.model.notch,
+                                                left: sides.left, right: sides.right), display: true)
         }
     }
 
     // MARK: - Sizing (what the text needs)
 
-    static func wingWidth(for content: NoticeContent) -> CGFloat {
-        let semibold = NSFont.systemFont(ofSize: IslandGeometry.font, weight: .semibold)
-        let regular = NSFont.systemFont(ofSize: IslandGeometry.font)
+    /// Each side's width for this content: the face (and word) on the left,
+    /// the time (or note) on the right, measured in the fonts they're drawn in.
+    static func sides(for content: NoticeContent) -> (left: CGFloat, right: CGFloat) {
+        func rounded(_ size: CGFloat, _ weight: NSFont.Weight, digits: Bool = false) -> NSFont {
+            let base = digits ? NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight)
+                              : NSFont.systemFont(ofSize: size, weight: weight)
+            guard let descriptor = base.fontDescriptor.withDesign(.rounded) else { return base }
+            return NSFont(descriptor: descriptor, size: size) ?? base
+        }
         func width(_ text: String, _ font: NSFont) -> CGFloat {
             ceil((text as NSString).size(withAttributes: [.font: font]).width)
         }
         let gap: CGFloat = 7
-        let titles = content.tone == .onBreak && content.title == "Break" ? BreakIslandRules.breakPrompts : [content.title]
-        let left = (titles.map { width($0, semibold) }.max() ?? 0) + (content.face == nil ? 0 : 34 + gap)
+        var left: CGFloat = content.face == nil ? 0 : IslandGeometry.faceWidth
+        if !content.title.isEmpty {
+            left += (left > 0 ? gap : 0) + width(content.title, rounded(IslandGeometry.font, .semibold))
+        }
         var right: CGFloat = 0
-        if let detail = content.detail { right += width(detail, regular) }
-        let digits = NSFont.monospacedDigitSystemFont(ofSize: IslandGeometry.font, weight: .bold)
+        if let detail = content.detail { right += width(detail, rounded(IslandGeometry.font, .regular)) }
+        let digits = rounded(IslandGeometry.font, .bold, digits: true)
         if let end = content.countdownTo {
             right += (right > 0 ? gap : 0) + width(end.timeIntervalSinceNow >= 3600 ? "0:00:00" : "00:00", digits)
         }
-        if content.countUpFrom != nil {
-            right += (right > 0 ? gap : 0) + width("+0:00:00", digits)
+        if let start = content.countUpFrom {
+            let long = Date().timeIntervalSince(start) >= 3000
+            right += (right > 0 ? gap : 0) + width(long ? "+0:00:00" : "+00:00", digits)
         }
-        return IslandGeometry.wingWidth(left: left, right: right)
+        return (IslandGeometry.side(left), IslandGeometry.side(right))
     }
 
     /// The notch screen if there is one (a MacBook's built-in display),

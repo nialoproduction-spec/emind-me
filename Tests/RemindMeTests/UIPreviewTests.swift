@@ -356,29 +356,40 @@ final class UIPreviewTests: XCTestCase {
     /// notch, the way it looks on a MacBook.
     private func island(_ content: NoticeContent, settings: BreakTimerSettings = BreakTimerSettings()) -> some View {
         let model = IslandModel()
-        model.notch = IslandGeometry.notch(CGSize(width: 190, height: 37))
+        // A 16-inch MacBook Pro's notch.
+        model.notch = IslandGeometry.notch(CGSize(width: 200, height: 37))
         model.content = content
         model.palette = BreakIslandRules.palette(for: content.tone ?? .work, settings: settings)
-        model.wing = BreakIslandController.wingWidth(for: content)
+        let sides = BreakIslandController.sides(for: content)
+        model.leftWing = sides.left
+        model.rightWing = sides.right
+        model.roomLeft = sides.left
         model.isOpen = true
-        let width = model.notch.middleWidth + model.wing * 2
+        let width = sides.left + model.notch.middleWidth + sides.right
         return ZStack(alignment: .top) {
             LinearGradient(colors: [Color(red: 0.13, green: 0.15, blue: 0.22), Color(red: 0.05, green: 0.05, blue: 0.08)],
                            startPoint: .topLeading, endPoint: .bottomTrailing)
             IslandView(model: model)
-                .frame(width: width + 40, height: 37)
+                .frame(width: width, height: 37)
+                .offset(x: (sides.left - sides.right) / 2)
             UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 9, bottomTrailingRadius: 9,
                                    topTrailingRadius: 0, style: .continuous)
                 .fill(Color.black)
                 .frame(width: model.notch.middleWidth, height: 37)
         }
-        .frame(width: max(width + 60, 560), height: 70)
+        .frame(width: 560, height: 60)
     }
 
     func testRenderNotchIsland() throws {
         try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
         let now = Date()
         let states = VStack(spacing: 0) {
+            // Between moments: face and time only.
+            island(NoticeContent(title: "", countdownTo: now.addingTimeInterval(38 * 60 + 12),
+                                 face: .smug, tone: .work, sticky: true))
+            island(NoticeContent(title: "", countdownTo: now.addingTimeInterval(8 * 60 + 54),
+                                 face: .sleepy, tone: .onBreak, sticky: true))
+            // The moments, with words.
             island(NoticeContent(title: "Working", countdownTo: now.addingTimeInterval(38 * 60 + 12),
                                  face: .smug, tone: .work, sticky: true))
             island(NoticeContent(title: "Break", countdownTo: now.addingTimeInterval(8 * 60 + 54),
@@ -525,7 +536,8 @@ final class UIPreviewTests: XCTestCase {
         var rng = SystemRandomNumberGenerator()
         let moods: [(String, Kaomoji.Mood)] = [("happy", .happy), ("calm", .calm), ("love", .love),
                                                 ("shocked", .shocked), ("sad", .sad), ("angry", .angry),
-                                                ("dead", .dead), ("cool", .cool), ("silly", .silly)]
+                                                ("dead", .dead), ("cool", .cool), ("silly", .silly),
+                                                ("pleading", .pleading), ("nervous", .nervous)]
         let sheet = VStack(alignment: .leading, spacing: 10) {
             Text("Eyes").foregroundStyle(.white)
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(88)), count: 9), spacing: 6) {

@@ -150,7 +150,7 @@ final class ReminderSchedulerTests: XCTestCase {
     }
 
     func testFaceKitHasOverAThousandFaces() {
-        XCTAssertGreaterThanOrEqual(Kaomoji.count, 7000)
+        XCTAssertGreaterThanOrEqual(Kaomoji.count, 15000)
         XCTAssertGreaterThan(Kaomoji.variety(.silly), 100)
         XCTAssertTrue(Kaomoji.Mood.allCases.allSatisfy { Kaomoji.variety($0) > 10 })
         for index in stride(from: 0, to: Kaomoji.count, by: 37) {
@@ -331,23 +331,32 @@ final class ReminderSchedulerTests: XCTestCase {
         let screen = CGRect(x: 0, y: 0, width: 1728, height: 1117)
         let notch = IslandGeometry.notch(CGSize(width: 200, height: 37))
         XCTAssertTrue(notch.hasNotch)
-        let frame = IslandGeometry.frame(screen: screen, notch: notch, wing: 60)
+        let frame = IslandGeometry.frame(screen: screen, notch: notch, left: 45, right: 60)
         XCTAssertEqual(frame.height, 37, "as tall as the notch")
         XCTAssertEqual(frame.maxY, 1117, "flush with the top of the screen")
-        XCTAssertEqual(frame.midX, 864, "centred on the notch")
-        XCTAssertEqual(frame.width, 200 + 120)
+        XCTAssertEqual(frame.minX, 864 - 100 - 45, "left side starts 45 pt out from the notch")
+        XCTAssertEqual(frame.maxX, 864 + 100 + 60, "right side ends 60 pt out from the notch")
 
         let plain = IslandGeometry.notch(.zero)
         XCTAssertFalse(plain.hasNotch)
         XCTAssertEqual(plain.middleWidth, IslandGeometry.noNotchGap)
     }
 
-    func testIslandWingsFitTheText() {
-        // Sized to the wider side, plus the gaps: the text hugs the notch.
-        XCTAssertEqual(IslandGeometry.wingWidth(left: 80, right: 30),
-                       80 + IslandGeometry.innerGap + IslandGeometry.outerPadding)
-        XCTAssertEqual(IslandGeometry.wingWidth(left: 5, right: 5), IslandGeometry.minWing, "never too thin")
-        XCTAssertEqual(IslandGeometry.wingWidth(left: 900, right: 5), IslandGeometry.maxWing, "never too far out")
+    func testIslandSidesFitTheirOwnContent() {
+        XCTAssertEqual(IslandGeometry.side(30), 30 + IslandGeometry.innerGap + IslandGeometry.outerPadding)
+        XCTAssertEqual(IslandGeometry.side(5), IslandGeometry.minWing, "never too thin")
+        XCTAssertEqual(IslandGeometry.side(900), IslandGeometry.maxWing, "never too far out")
+    }
+
+    @MainActor
+    func testCompactIslandIsSmall() {
+        let now = Date()
+        let compact = BreakIslandController.sides(for: NoticeContent(
+            title: "", countdownTo: now.addingTimeInterval(38 * 60), face: .smug, tone: .work))
+        XCTAssertLessThanOrEqual(compact.left, 50, "just the face")
+        XCTAssertLessThanOrEqual(compact.right, 70, "just the time")
+        let state = BreakCycleState.started(BreakCycleConfig(workMinutes: 40, breakMinutes: 10), at: now)
+        XCTAssertTrue(BreakIslandRules.content(for: state).title.isEmpty, "between moments: no words")
     }
 
     func testShortcutUnitsInIntervals() {

@@ -57,9 +57,11 @@ Sources/RemindMe/
                                  a double-click, or a 0.9 s rest of the pointer (`ReminderPopupSettings
                                  .dismiss`): last words + shake, "Sayonara." / "accepts fate", dissolve
     BreakIsland.swift            the break timer's home, at the camera notch: solid colours (the pick
-                                 shows exactly; glass was tried and dropped), living faces (blink /
-                                 sleepy bob + drifting z's / angry shake), breathing break with
-                                 rotating prompts; "Working" / "Break" + countdown, or
+                                 shows exactly; glass was tried and dropped). Compact: each side only
+                                 as wide as its own content (asymmetric around the notch); between
+                                 moments just face + time, words only with the moments. Living faces
+                                 (blink / sleepy bob + drifting z's / angry shake), breathing break;
+                                 "Working" / "Break" + countdown, or
                                  "Come back!" with a red pulsing left side and red +time away; work
                                  countdown kept or hidden (`BreakTimerSettings.keepWorkCountdown`);
                                  colours per state (`IslandPalette`: work black, break #C5D2E5, time
@@ -74,7 +76,7 @@ Sources/RemindMe/
     EditItemView, ItemHistoryView, WeeklySummaryView, SmartSettingsView, ThemeSettingsView,
     ManageRemindersView, ReminderRowView, ChecklistRowView, CollapsedPillView, EndOfDaySummaryView
   Faces/                         24 traced kaomoji faces, animation, menu bar face; Kaomoji.swift = the
-                                 face kit (26 eyes × 27 mouths × 11 extras = 7,722 faces, 9 moods);
+                                 face kit (34 eyes × 35 mouths × 16 extras = 19,040 faces, 11 moods);
                                  MenuBarFace wakes near the pointer and its pupils follow it
                                  (`look`/`watchImage`, polled 10×/s, 30×/s while awake)
 Tests/RemindMeTests/             XCTest; UIPreviewTests renders PNGs when PREVIEW_DIR is set (CI attaches
