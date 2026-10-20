@@ -21,8 +21,11 @@ enum IslandGeometry {
     static let faceHeight: CGFloat = 13
     static let faceWidth: CGFloat = 25
     /// Room on a break between the face and the notch for its z's to float
-    /// up into (otherwise the camera notch hides them).
-    static let zRoom: CGFloat = 18
+    /// up into (otherwise the camera notch hides them): 18 pt as they come,
+    /// more or less as the z's are moved or resized.
+    static func zRoom(_ layout: IslandLayout) -> CGFloat {
+        CGFloat(max(0, 8 + layout.zees.x + 10 * layout.zees.size))
+    }
 
     struct Notch: Equatable {
         var middleWidth: CGFloat
@@ -44,11 +47,13 @@ enum IslandGeometry {
     }
 
     /// The window: `left` points out from the notch's left edge, `right`
-    /// from its right edge, as tall as the notch, at the top of the screen.
-    static func frame(screen: CGRect, notch: Notch, left: CGFloat, right: CGFloat) -> CGRect {
+    /// from its right edge, as tall as the notch plus `drop` (how far it
+    /// reaches below it), at the top of the screen.
+    static func frame(screen: CGRect, notch: Notch, left: CGFloat, right: CGFloat, drop: CGFloat = 0) -> CGRect {
         let notchLeft = screen.midX - notch.middleWidth / 2
-        return CGRect(x: notchLeft - left, y: screen.maxY - notch.height,
-                      width: left + notch.middleWidth + right, height: notch.height)
+        let height = notch.height + drop
+        return CGRect(x: notchLeft - left, y: screen.maxY - height,
+                      width: left + notch.middleWidth + right, height: height)
     }
 }
 
@@ -136,6 +141,8 @@ final class IslandModel: ObservableObject {
     /// What's showing: face + title left of the notch, detail / countdown right.
     @Published var content: NoticeContent?
     @Published var palette = BreakIslandRules.palette(for: .work, settings: BreakTimerSettings())
+    /// Where the parts sit (Settings → Smart → Notch layout).
+    @Published var layout = IslandLayout()
 }
 
 /// The island: liquid glass tinted per state (black working, soft blue on a
@@ -146,26 +153,66 @@ struct IslandView: View {
     var onTap: () -> Void = {}
 
     var body: some View {
-        let notch = model.notch
-        let left = model.isOpen ? model.leftWing : 0
-        let right = model.isOpen ? model.rightWing : 0
-        let x = model.roomLeft - left
-        let palette = model.palette
-        let onBreak = model.content?.tone == .onBreak
+        IslandBody(notch: model.notch, isOpen: model.isOpen, leftWing: model.leftWing,
+                   rightWing: model.rightWing, roomLeft: model.roomLeft, content: model.content,
+                   palette: model.palette, layout: model.layout)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onTap)
+    }
+}
+
+/// Settings' notch editor: drag a part to move it. `scale` is how much the
+/// editor's picture is zoomed, so a drag moves the part exactly with the
+/// pointer.
+struct IslandEditing {
+    var layout: Binding<IslandLayout>
+    var selected: Binding<IslandLayout.Part>
+    var scale: CGFloat = 1
+}
+
+/// The island from plain values: the colour shape around the notch, the
+/// face (and its z's) and word on the left, the time on the right, each
+/// where the layout puts it. With `editing`, each part can be dragged.
+struct IslandBody: View {
+    let notch: IslandGeometry.Notch
+    var isOpen = true
+    let leftWing: CGFloat
+    let rightWing: CGFloat
+    let roomLeft: CGFloat
+    let content: NoticeContent?
+    let palette: IslandPalette
+    var layout = IslandLayout()
+    var editing: IslandEditing? = nil
+
+    var body: some View {
+        let left = isOpen ? leftWing : 0
+        let right = isOpen ? rightWing : 0
+        let x = roomLeft - left
+        let height = notch.height + CGFloat(layout.drop)
+        let onBreak = content?.tone == .onBreak
         ZStack(alignment: .topLeading) {
             IslandSurface(palette: palette, leftWidth: left, middle: notch.middleWidth, breathing: onBreak)
-                .frame(width: left + notch.middleWidth + right, height: notch.height)
-                .opacity(model.isOpen || notch.hasNotch ? 1 : 0)
+                .frame(width: left + notch.middleWidth + right, height: height)
+                .opacity(isOpen || notch.hasNotch ? 1 : 0)
                 .offset(x: x)
 
-            if let content = model.content {
+            if let content {
                 HStack(spacing: 0) {
                     HStack(spacing: 7) {
-                        if let face = content.face { IslandFace(face: face, tone: content.tone ?? .work) }
+                        if let face = content.face {
+                            IslandFace(face: face, tone: content.tone ?? .work, layout: layout,
+                                       zeesHandle: handle(.zees))
+                                .offset(x: layout.face.x, y: layout.face.y)
+                                .modifier(handle(.face))
+                        }
                         if !content.title.isEmpty {
                             Text(content.title)
-                                .font(.system(size: IslandGeometry.font, weight: .semibold, design: .rounded))
+                                .font(.system(size: IslandGeometry.font * layout.words.size,
+                                              weight: .semibold, design: .rounded))
                                 .fixedSize()
+                                .offset(x: layout.words.x, y: layout.words.y)
+                                .modifier(handle(.words))
                         }
                     }
                     .foregroundStyle(palette.leftText.color)
@@ -178,28 +225,73 @@ struct IslandView: View {
                     HStack(spacing: 7) {
                         if let detail = content.detail {
                             Text(detail)
-                                .font(.system(size: IslandGeometry.font, design: .rounded))
+                                .font(.system(size: IslandGeometry.font * layout.time.size, design: .rounded))
                                 .foregroundStyle(palette.text.color.opacity(0.8))
                                 .fixedSize()
                         }
-                        if let end = content.countdownTo { Countdown(end: end, color: palette.time.color) }
-                        if let start = content.countUpFrom { CountUp(start: start, color: palette.time.color) }
+                        if let end = content.countdownTo {
+                            Countdown(end: end, color: palette.time.color, size: layout.time.size)
+                        }
+                        if let start = content.countUpFrom {
+                            CountUp(start: start, color: palette.time.color, size: layout.time.size)
+                        }
                     }
+                    .offset(x: layout.time.x, y: layout.time.y)
+                    .modifier(handle(.time))
                     .lineLimit(1)
                     .padding(.leading, IslandGeometry.innerGap)
                     .frame(width: right, alignment: .leading)
                 }
-                .frame(height: notch.height)
+                .frame(height: height)
                 .clipped()
-                .opacity(model.isOpen ? 1 : 0)
+                .opacity(isOpen ? 1 : 0)
                 .offset(x: x)
                 .id("\(content.title)|\(content.detail ?? "")|\(content.countdownTo?.timeIntervalSinceReferenceDate ?? 0)")
                 .transition(.opacity)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onTap)
+    }
+
+    private func handle(_ part: IslandLayout.Part) -> EditHandle {
+        EditHandle(part: part, editing: editing)
+    }
+}
+
+/// Makes one part draggable in the editor (and outlines the picked one).
+/// Does nothing on the real notch.
+struct EditHandle: ViewModifier {
+    let part: IslandLayout.Part
+    var editing: IslandEditing?
+    @State private var start: IslandLayout.Spot?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let editing {
+            let picked = editing.selected.wrappedValue == part
+            content
+                .overlay(
+                    RoundedRectangle(cornerRadius: 3)
+                        .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
+                        .padding(-3)
+                        .opacity(picked ? 0.9 : 0)
+                )
+                .contentShape(Rectangle().inset(by: -4))
+                .gesture(
+                    DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                        .onChanged { value in
+                            editing.selected.wrappedValue = part
+                            let from = start ?? editing.layout.wrappedValue[part]
+                            if start == nil { start = from }
+                            var spot = from
+                            spot.x = (from.x + value.translation.width / editing.scale).rounded()
+                            spot.y = (from.y + value.translation.height / editing.scale).rounded()
+                            editing.layout.wrappedValue[part] = spot
+                        }
+                        .onEnded { _ in start = nil }
+                )
+        } else {
+            content
+        }
     }
 }
 
@@ -269,6 +361,9 @@ struct IslandSurface: View {
 struct IslandFace: View {
     let face: Face
     let tone: IslandTone
+    var layout = IslandLayout()
+    /// Lets the z's be dragged on their own in the editor.
+    var zeesHandle = EditHandle(part: .zees)
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var blinking = false
@@ -276,14 +371,18 @@ struct IslandFace: View {
     @State private var shake: Double = 0
 
     var body: some View {
-        FaceGlyph(face: blinking ? .sleepy : face)
+        FaceGlyph(face: blinking ? .sleepy : face, size: layout.face.size)
             .offset(y: tone == .onBreak ? (bob ? -1.2 : 1.2) : 0)
             .rotationEffect(.degrees(shake))
             .overlay(alignment: .topTrailing) {
-                if tone == .onBreak { FloatingZs().offset(x: 6, y: -4) }
+                if tone == .onBreak {
+                    FloatingZs(scale: layout.zees.size, still: zeesHandle.editing != nil)
+                        .offset(x: 6 + layout.zees.x, y: -4 + layout.zees.y)
+                        .modifier(zeesHandle)
+                }
             }
             // On a break, the z's get their own room before the notch.
-            .padding(.trailing, tone == .onBreak ? IslandGeometry.zRoom : 0)
+            .padding(.trailing, tone == .onBreak ? IslandGeometry.zRoom(layout) : 0)
             .task(id: tone) { await animate() }
     }
 
@@ -312,48 +411,55 @@ struct IslandFace: View {
 }
 
 /// Two little z's drifting up from a resting face.
+/// Two little z's drifting up from a resting face. Still (and fully
+/// shown) in the editor, so they're easy to grab.
 private struct FloatingZs: View {
+    var scale: Double = 1
+    var still = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var rise = false
 
     var body: some View {
         ZStack {
             z(size: 7, delay: 0)
-            z(size: 5.5, delay: 1.1)
+            z(size: 5.5, delay: 1.1).offset(x: still ? 4 * scale : 0, y: still ? -4 * scale : 0)
         }
         .onAppear {
-            guard !reduceMotion else { return }
+            guard !reduceMotion, !still else { return }
             rise = true
         }
     }
 
     private func z(size: CGFloat, delay: Double) -> some View {
         Text("z")
-            .font(.system(size: size, weight: .heavy, design: .rounded))
-            .offset(x: rise ? 6 : 0, y: rise ? -8 : 0)
-            .opacity(reduceMotion ? 0.8 : (rise ? 0 : 0.95))
-            .animation(.easeOut(duration: 2.2).repeatForever(autoreverses: false).delay(delay), value: rise)
+            .font(.system(size: size * scale, weight: .heavy, design: .rounded))
+            .offset(x: rise ? 6 * scale : 0, y: rise ? -8 * scale : 0)
+            .opacity(reduceMotion || still ? 0.85 : (rise ? 0 : 0.95))
+            .animation(still ? nil : .easeOut(duration: 2.2).repeatForever(autoreverses: false).delay(delay),
+                       value: rise)
     }
 }
 
 private struct FaceGlyph: View {
     let face: Face
+    var size: Double = 1
     var body: some View {
         Image(nsImage: MenuBarFace.faceImage(face, span: MenuBarFace.span(of: [face]), offset: .zero))
             .renderingMode(.template)
             .resizable()
             .aspectRatio(contentMode: .fit)
-            .frame(height: IslandGeometry.faceHeight)
+            .frame(height: IslandGeometry.faceHeight * size)
     }
 }
 
 private struct Countdown: View {
     let end: Date
     let color: Color
+    var size: Double = 1
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             Text(BreakCycleState.clockString(end.timeIntervalSince(context.date)))
-                .font(.system(size: IslandGeometry.font, weight: .bold, design: .rounded).monospacedDigit())
+                .font(.system(size: IslandGeometry.font * size, weight: .bold, design: .rounded).monospacedDigit())
                 .foregroundStyle(color)
         }
     }
@@ -363,10 +469,11 @@ private struct Countdown: View {
 private struct CountUp: View {
     let start: Date
     let color: Color
+    var size: Double = 1
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             Text(BreakCycleState.elapsedString(context.date.timeIntervalSince(start)))
-                .font(.system(size: IslandGeometry.font, weight: .bold, design: .rounded).monospacedDigit())
+                .font(.system(size: IslandGeometry.font * size, weight: .bold, design: .rounded).monospacedDigit())
                 .foregroundStyle(color)
         }
     }
@@ -505,15 +612,18 @@ final class BreakIslandController {
             return
         }
 
-        let sides = Self.sides(for: content)
+        let layout = settings.value.layout
+        let drop = CGFloat(layout.drop)
+        model.layout = layout
+        let sides = Self.sides(for: content, layout: layout)
         // Make room in the window for the bigger of old and new on each side
         // (the shape stays put around the notch), animate, then trim.
         let roomLeft = max(sides.left, model.isOpen ? model.leftWing : 0)
         let roomRight = max(sides.right, model.isOpen ? model.rightWing : 0)
         panel.disableScreenUpdatesUntilFlush()
         model.roomLeft = roomLeft
-        panel.setFrame(IslandGeometry.frame(screen: screenFrame, notch: model.notch, left: roomLeft, right: roomRight),
-                       display: true)
+        panel.setFrame(IslandGeometry.frame(screen: screenFrame, notch: model.notch, left: roomLeft,
+                                            right: roomRight, drop: drop), display: true)
 
         let wasClosed = !panel.isVisible || !model.isOpen
         if !panel.isVisible {
@@ -542,15 +652,18 @@ final class BreakIslandController {
             panel.disableScreenUpdatesUntilFlush()
             self.model.roomLeft = sides.left
             panel.setFrame(IslandGeometry.frame(screen: screenFrame, notch: self.model.notch,
-                                                left: sides.left, right: sides.right), display: true)
+                                                left: sides.left, right: sides.right, drop: drop), display: true)
         }
     }
 
     // MARK: - Sizing (what the text needs)
 
     /// Each side's width for this content: the face (and word) on the left,
-    /// the time (or note) on the right, measured in the fonts they're drawn in.
-    static func sides(for content: NoticeContent) -> (left: CGFloat, right: CGFloat) {
+    /// the time (or note) on the right, measured in the fonts and sizes
+    /// they're drawn in. A part moved outward makes its side grow, so it's
+    /// never cut off; the layout's extra width is added on top.
+    static func sides(for content: NoticeContent,
+                      layout: IslandLayout = IslandLayout()) -> (left: CGFloat, right: CGFloat) {
         func rounded(_ size: CGFloat, _ weight: NSFont.Weight, digits: Bool = false) -> NSFont {
             let base = digits ? NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight)
                               : NSFont.systemFont(ofSize: size, weight: weight)
@@ -561,14 +674,24 @@ final class BreakIslandController {
             ceil((text as NSString).size(withAttributes: [.font: font]).width)
         }
         let gap: CGFloat = 7
-        var left: CGFloat = content.face == nil ? 0 : IslandGeometry.faceWidth
-        if content.face != nil, content.tone == .onBreak { left += IslandGeometry.zRoom }
+        let faceAndZees: CGFloat = content.face == nil ? 0
+            : IslandGeometry.faceWidth * CGFloat(layout.face.size)
+              + (content.tone == .onBreak ? IslandGeometry.zRoom(layout) : 0)
+        var left = faceAndZees
         if !content.title.isEmpty {
-            left += (left > 0 ? gap : 0) + width(content.title, rounded(IslandGeometry.font, .semibold))
+            left += (left > 0 ? gap : 0)
+                + width(content.title, rounded(IslandGeometry.font * CGFloat(layout.words.size), .semibold))
         }
+        // Moved out past the edge: grow that side.
+        var leftGrow: CGFloat = 0
+        if content.face != nil { leftGrow = max(leftGrow, CGFloat(-layout.face.x)) }
+        if !content.title.isEmpty {
+            leftGrow = max(leftGrow, CGFloat(-layout.words.x) - faceAndZees - (faceAndZees > 0 ? gap : 0))
+        }
+        let timeFont = IslandGeometry.font * CGFloat(layout.time.size)
         var right: CGFloat = 0
-        if let detail = content.detail { right += width(detail, rounded(IslandGeometry.font, .regular)) }
-        let digits = rounded(IslandGeometry.font, .bold, digits: true)
+        if let detail = content.detail { right += width(detail, rounded(timeFont, .regular)) }
+        let digits = rounded(timeFont, .bold, digits: true)
         if let end = content.countdownTo {
             right += (right > 0 ? gap : 0) + width(end.timeIntervalSinceNow >= 3600 ? "0:00:00" : "00:00", digits)
         }
@@ -576,7 +699,9 @@ final class BreakIslandController {
             let long = Date().timeIntervalSince(start) >= 3000
             right += (right > 0 ? gap : 0) + width(long ? "+0:00:00" : "+00:00", digits)
         }
-        return (IslandGeometry.side(left), IslandGeometry.side(right))
+        let rightGrow = CGFloat(max(0, layout.time.x))
+        return (IslandGeometry.side(left) + leftGrow + CGFloat(layout.leftExtra),
+                IslandGeometry.side(right) + rightGrow + CGFloat(layout.rightExtra))
     }
 
     /// The notch screen if there is one (a MacBook's built-in display),

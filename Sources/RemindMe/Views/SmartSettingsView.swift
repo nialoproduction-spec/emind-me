@@ -136,6 +136,8 @@ struct SmartSettingsView: View {
             breakTimer.value.awayColor = .awayRed
         }
         .controlSize(.small)
+
+        IslandLayoutEditor()
     }
 
     /// Quick colour picks, plus the system picker for anything else. The

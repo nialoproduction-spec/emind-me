@@ -177,18 +177,133 @@ struct BreakTimerSettings: Codable, Equatable {
     var breakColor = RGBColor.breakBlue
     /// The colour of the time-away count after a break.
     var awayColor = RGBColor.awayRed
+    /// Where the face, z's, word and time sit, and how big the notch is.
+    var layout = IslandLayout()
 
     init() {}
 
-    private enum CodingKeys: String, CodingKey { case keepWorkCountdown, workColor, breakColor, awayColor }
+    private enum CodingKeys: String, CodingKey { case keepWorkCountdown, workColor, breakColor, awayColor, layout }
 
-    /// Settings saved before colours existed still load (and keep their choice).
+    /// Settings saved before colours or the layout existed still load (and
+    /// keep their choices).
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         keepWorkCountdown = try c.decodeIfPresent(Bool.self, forKey: .keepWorkCountdown) ?? true
         workColor = try c.decodeIfPresent(RGBColor.self, forKey: .workColor) ?? .black
         breakColor = try c.decodeIfPresent(RGBColor.self, forKey: .breakColor) ?? .breakBlue
         awayColor = try c.decodeIfPresent(RGBColor.self, forKey: .awayColor) ?? .awayRed
+        layout = (try? c.decodeIfPresent(IslandLayout.self, forKey: .layout)) ?? IslandLayout()
+    }
+}
+
+/// Where things sit on the notch, set in Settings → Smart by dragging them.
+/// Offsets are points from their usual spot (x to the right, y down); sizes
+/// are multiples of the usual size. The sides grow by themselves when
+/// something is moved outward, so nothing gets cut off.
+struct IslandLayout: Codable, Equatable {
+    enum Part: String, CaseIterable, Codable {
+        case face, zees, words, time
+
+        var label: String {
+            switch self {
+            case .face: return "Face"
+            case .zees: return "Zzz"
+            case .words: return "Word"
+            case .time: return "Time"
+            }
+        }
+    }
+
+    struct Spot: Codable, Equatable {
+        var x: Double = 0
+        var y: Double = 0
+        var size: Double = 1
+
+        init(x: Double = 0, y: Double = 0, size: Double = 1) {
+            self.x = x
+            self.y = y
+            self.size = size
+        }
+
+        private enum CodingKeys: String, CodingKey { case x, y, size }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            x = try c.decodeIfPresent(Double.self, forKey: .x) ?? 0
+            y = try c.decodeIfPresent(Double.self, forKey: .y) ?? 0
+            size = try c.decodeIfPresent(Double.self, forKey: .size) ?? 1
+        }
+    }
+
+    var face = Spot()
+    /// Relative to the face (they float up from it).
+    var zees = Spot()
+    var words = Spot()
+    var time = Spot()
+    /// Extra width on each side, in points.
+    var leftExtra: Double = 0
+    var rightExtra: Double = 0
+    /// How far it reaches down below the notch, in points.
+    var drop: Double = 0
+
+    static let sizes: ClosedRange<Double> = 0.6...2.4
+    static let reach: ClosedRange<Double> = -160...160
+    static let maxExtra: Double = 160
+    static let maxDrop: Double = 48
+
+    init() {}
+
+    subscript(part: Part) -> Spot {
+        get {
+            switch part {
+            case .face: return face
+            case .zees: return zees
+            case .words: return words
+            case .time: return time
+            }
+        }
+        set {
+            var spot = newValue
+            spot.x = min(Self.reach.upperBound, max(Self.reach.lowerBound, spot.x))
+            // Up to the top edge, down to the bottom of whatever it reaches.
+            spot.y = min(30 + drop, max(-30, spot.y))
+            spot.size = min(Self.sizes.upperBound, max(Self.sizes.lowerBound, spot.size))
+            switch part {
+            case .face: face = spot
+            case .zees: zees = spot
+            case .words: words = spot
+            case .time: time = spot
+            }
+        }
+    }
+
+    mutating func nudge(_ part: Part, dx: Double = 0, dy: Double = 0) {
+        var spot = self[part]
+        spot.x += dx
+        spot.y += dy
+        self[part] = spot
+    }
+
+    mutating func resize(_ part: Part, by step: Double) {
+        var spot = self[part]
+        spot.size = ((spot.size + step) * 10).rounded() / 10
+        self[part] = spot
+    }
+
+    static func clampExtra(_ value: Double) -> Double { min(maxExtra, max(0, value)) }
+    static func clampDrop(_ value: Double) -> Double { min(maxDrop, max(0, value)) }
+
+    private enum CodingKeys: String, CodingKey { case face, zees, words, time, leftExtra, rightExtra, drop }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        face = try c.decodeIfPresent(Spot.self, forKey: .face) ?? Spot()
+        zees = try c.decodeIfPresent(Spot.self, forKey: .zees) ?? Spot()
+        words = try c.decodeIfPresent(Spot.self, forKey: .words) ?? Spot()
+        time = try c.decodeIfPresent(Spot.self, forKey: .time) ?? Spot()
+        leftExtra = try c.decodeIfPresent(Double.self, forKey: .leftExtra) ?? 0
+        rightExtra = try c.decodeIfPresent(Double.self, forKey: .rightExtra) ?? 0
+        drop = try c.decodeIfPresent(Double.self, forKey: .drop) ?? 0
     }
 }
 

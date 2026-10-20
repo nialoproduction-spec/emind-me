@@ -65,7 +65,11 @@ Sources/RemindMe/
                                  moments just face + time, words only with the moments. Living faces
                                  (blink / sleepy bob + drifting z's / angry shake), breathing break;
                                  on a break the left side is wider by `zRoom` so the z's float in
-                                 view instead of under the camera;
+                                 view instead of under the camera; every part's position and size,
+                                 extra side widths and reach below the notch come from
+                                 `BreakTimerSettings.layout` (`IslandLayout`), edited by dragging in
+                                 Views/IslandLayoutEditor.swift (Settings → Smart); `IslandBody` draws
+                                 from plain values so the editor and the notch share it;
                                  "Working" / "Break" + countdown, or
                                  "Come back!" with a red pulsing left side and red +time away; work
                                  countdown kept or hidden (`BreakTimerSettings.keepWorkCountdown`);

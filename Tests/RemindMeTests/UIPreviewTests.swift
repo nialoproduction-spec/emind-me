@@ -360,7 +360,8 @@ final class UIPreviewTests: XCTestCase {
         model.notch = IslandGeometry.notch(CGSize(width: 200, height: 37))
         model.content = content
         model.palette = BreakIslandRules.palette(for: content.tone ?? .work, settings: settings)
-        let sides = BreakIslandController.sides(for: content)
+        model.layout = settings.layout
+        let sides = BreakIslandController.sides(for: content, layout: settings.layout)
         model.leftWing = sides.left
         model.rightWing = sides.right
         model.roomLeft = sides.left
@@ -370,14 +371,14 @@ final class UIPreviewTests: XCTestCase {
             LinearGradient(colors: [Color(red: 0.13, green: 0.15, blue: 0.22), Color(red: 0.05, green: 0.05, blue: 0.08)],
                            startPoint: .topLeading, endPoint: .bottomTrailing)
             IslandView(model: model)
-                .frame(width: width, height: 37)
+                .frame(width: width, height: 37 + settings.layout.drop)
                 .offset(x: (sides.right - sides.left) / 2) // puts the notch's middle at the centre
             UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 9, bottomTrailingRadius: 9,
                                    topTrailingRadius: 0, style: .continuous)
                 .fill(Color.black)
                 .frame(width: model.notch.middleWidth, height: 37)
         }
-        .frame(width: 560, height: 60)
+        .frame(width: 560, height: 60 + settings.layout.drop)
     }
 
     func testRenderNotchIsland() throws {
@@ -399,8 +400,31 @@ final class UIPreviewTests: XCTestCase {
                    settings: { var s = BreakTimerSettings(); s.breakColor = .awayRed; return s }())
             island(NoticeContent(title: "Come back!", countUpFrom: now.addingTimeInterval(-192),
                                  face: .furious, tone: .away, sticky: true))
+            // Customised in Settings: bigger face moved out and down, big z's,
+            // bigger time, reaching 10 pt below the notch.
+            island(NoticeContent(title: "", countdownTo: now.addingTimeInterval(8 * 60 + 54),
+                                 face: .sleepy, tone: .onBreak, sticky: true),
+                   settings: {
+                       var s = BreakTimerSettings()
+                       s.layout.face = IslandLayout.Spot(x: -14, y: 4, size: 1.4)
+                       s.layout.zees = IslandLayout.Spot(x: 4, y: -2, size: 1.6)
+                       s.layout.time = IslandLayout.Spot(x: 6, y: 4, size: 1.3)
+                       s.layout.drop = 10
+                       return s
+                   }())
         }
         try save(states, as: "preview-notch-island.png")
+    }
+
+    /// Settings' notch editor (default layout, face picked).
+    func testRenderNotchLayoutEditor() throws {
+        try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
+        let view = IslandLayoutEditor()
+            .frame(width: 300)
+            .padding(20)
+            .background(Color(white: 0.16))
+            .environment(\.colorScheme, .dark)
+        try save(view, as: "preview-notch-layout-editor.png")
     }
 
     /// The whole Smart settings tab at the sheet's real width (340 with 20

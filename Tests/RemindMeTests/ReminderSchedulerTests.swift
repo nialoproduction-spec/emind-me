@@ -367,6 +367,42 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertTrue(BreakIslandRules.content(for: state).title.isEmpty, "between moments: no words")
     }
 
+    @MainActor
+    func testNotchLayoutMovesResizesAndGrows() throws {
+        // Settings saved before the layout existed still load, untouched.
+        let old = #"{"keepWorkCountdown":false,"workColor":{"r":0,"g":0,"b":0}}"#.data(using: .utf8)!
+        let loaded = try JSONDecoder().decode(BreakTimerSettings.self, from: old)
+        XCTAssertFalse(loaded.keepWorkCountdown)
+        XCTAssertEqual(loaded.layout, IslandLayout())
+
+        var layout = IslandLayout()
+        layout.nudge(.face, dx: -500)
+        XCTAssertEqual(layout.face.x, IslandLayout.reach.lowerBound, "can't fly off the screen")
+        layout.resize(.time, by: 9)
+        XCTAssertEqual(layout.time.size, IslandLayout.sizes.upperBound)
+        XCTAssertEqual(IslandLayout.clampDrop(500), IslandLayout.maxDrop)
+
+        let content = NoticeContent(title: "", countdownTo: Date().addingTimeInterval(500),
+                                    face: .sleepy, tone: .onBreak)
+        let plain = BreakIslandController.sides(for: content)
+        var moved = IslandLayout()
+        moved.face.x = -30
+        moved.rightExtra = 20
+        let grown = BreakIslandController.sides(for: content, layout: moved)
+        XCTAssertEqual(grown.left, plain.left + 30, accuracy: 0.5, "face dragged out: the side grows to fit it")
+        XCTAssertEqual(grown.right, plain.right + 20, accuracy: 0.5, "extra width on the right")
+        var bigZees = IslandLayout()
+        bigZees.zees.size = 2
+        XCTAssertGreaterThan(BreakIslandController.sides(for: content, layout: bigZees).left, plain.left,
+                             "bigger z's get more room before the notch")
+
+        let screen = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+        let notch = IslandGeometry.notch(CGSize(width: 200, height: 37))
+        let tall = IslandGeometry.frame(screen: screen, notch: notch, left: 45, right: 60, drop: 12)
+        XCTAssertEqual(tall.height, 49, "reaches 12 pt below the notch")
+        XCTAssertEqual(tall.maxY, 1117, "still flush with the top")
+    }
+
     func testShortcutUnitsInIntervals() {
         XCTAssertEqual(ItemParser.parse("drink water every 40m").intervalSeconds, 2400)
         XCTAssertEqual(ItemParser.parse("stretch every 2 hrs").intervalSeconds, 7200)
