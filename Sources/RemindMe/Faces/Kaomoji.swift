@@ -198,7 +198,7 @@ struct Kaomoji: Hashable {
         case .wink:
             return [circle(c, 11, filled: true)]
         case .sheepish:
-            return [-8, 0, 8].map { dy in
+            return ([-8, 0, 8] as [CGFloat]).map { dy in
                 line([CGPoint(x: c.x - 15, y: c.y + dy), CGPoint(x: c.x + 15, y: c.y + dy)])
             }
         }
@@ -272,16 +272,29 @@ struct Kaomoji: Hashable {
         }
     }
 
+    /// A little "z" for a sleeping face.
+    private static func zee(at c: CGPoint, size: CGFloat) -> Stroke {
+        let a = CGPoint(x: c.x, y: c.y)
+        let b = CGPoint(x: c.x + size, y: c.y)
+        let d = CGPoint(x: c.x, y: c.y + size)
+        let e = CGPoint(x: c.x + size, y: c.y + size)
+        return line([a, b, d, e])
+    }
+
     private static func extra(_ extra: Extra) -> [Stroke] {
         switch extra {
         case .none:
             return []
         case .blush:
-            return [left, right].flatMap { c in
-                [-9, 0, 9].map { dx in
-                    line([CGPoint(x: c.x + dx - 3, y: c.y + 30), CGPoint(x: c.x + dx + 3, y: c.y + 22)])
+            var marks: [Stroke] = []
+            for c in [left, right] {
+                for dx: CGFloat in [-9, 0, 9] {
+                    let bottom = CGPoint(x: c.x + dx - 3, y: c.y + 30)
+                    let top = CGPoint(x: c.x + dx + 3, y: c.y + 22)
+                    marks.append(line([bottom, top]))
                 }
             }
+            return marks
         case .tears:
             return [left, right].map { c in
                 var p = Path()
@@ -319,10 +332,7 @@ struct Kaomoji: Hashable {
                 return Stroke(path: p, filled: true)
             }
         case .sleep:
-            return [(CGPoint(x: 168, y: 18), CGFloat(11)), (CGPoint(x: 184, y: 2), CGFloat(8))].map { c, s in
-                line([CGPoint(x: c.x, y: c.y), CGPoint(x: c.x + s, y: c.y),
-                      CGPoint(x: c.x, y: c.y + s), CGPoint(x: c.x + s, y: c.y + s)])
-            }
+            return [zee(at: CGPoint(x: 168, y: 18), size: 11), zee(at: CGPoint(x: 184, y: 2), size: 8)]
         }
     }
 }
