@@ -262,7 +262,7 @@ struct IslandBody: View {
 struct EditHandle: ViewModifier {
     let part: IslandLayout.Part
     var editing: IslandEditing?
-    @State private var start: IslandLayout.Spot?
+    @State private var start: IslandLayout.Spot? = nil
 
     @ViewBuilder
     func body(content: Content) -> some View {
