@@ -53,9 +53,9 @@ Sources/RemindMe/
   Panel/
     ReminderPanel.swift          borderless non-activating NSPanel
     NoticePill.swift             reminders' popup: the habit card's look (theme, a face-kit face, title)
-                                 with no buttons, a short quote (ReminderQuotes) instead; hover (after the
-                                 pointer was outside) or click = dramatic death (x_x face, last words,
-                                 shake, dissolve into bits); stays `ReminderPopupSettings.seconds`
+                                 with no buttons, a short quote (ReminderQuotes) instead;  sent off by its ×,
+                                 a double-click, or a 0.9 s rest of the pointer (`ReminderPopupSettings
+                                 .dismiss`): last words + shake, "Sayonara." / "accepts fate", dissolve
     BreakIsland.swift            the break timer's home, at the camera notch: solid colours (the pick
                                  shows exactly; glass was tried and dropped), living faces (blink /
                                  sleepy bob + drifting z's / angry shake), breathing break with
@@ -74,7 +74,9 @@ Sources/RemindMe/
     EditItemView, ItemHistoryView, WeeklySummaryView, SmartSettingsView, ThemeSettingsView,
     ManageRemindersView, ReminderRowView, ChecklistRowView, CollapsedPillView, EndOfDaySummaryView
   Faces/                         24 traced kaomoji faces, animation, menu bar face; Kaomoji.swift = the
-                                 face kit (eyes × mouths × extras = 2,016 faces, by mood) for popups
+                                 face kit (26 eyes × 27 mouths × 11 extras = 7,722 faces, 9 moods);
+                                 MenuBarFace wakes near the pointer and its pupils follow it
+                                 (`look`/`watchImage`, polled 10×/s, 30×/s while awake)
 Tests/RemindMeTests/             XCTest; UIPreviewTests renders PNGs when PREVIEW_DIR is set (CI attaches
                                  them to the release: look at them after any visual change)
 Design/, scripts/trace_faces.py  source art + the tracer that generated Faces/FaceArt.swift

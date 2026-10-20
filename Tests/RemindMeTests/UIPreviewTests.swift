@@ -405,6 +405,34 @@ final class UIPreviewTests: XCTestCase {
         try save(view, as: "preview-12-smart-settings-full.png")
     }
 
+    /// The menu bar face awake, looking at the pointer in different places.
+    func testRenderWatchingFace() throws {
+        try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
+        let looks: [(String, CGVector, Bool, Bool)] = [
+            ("wow", CGVector(dx: 0, dy: 1), false, true),
+            ("down", CGVector(dx: 0, dy: 1), false, false),
+            ("left", CGVector(dx: -1, dy: 0.3), false, false),
+            ("right", CGVector(dx: 1, dy: 0.3), false, false),
+            ("down-left", CGVector(dx: -0.7, dy: 0.7), false, false),
+            ("blink", .zero, true, false),
+        ]
+        let row = HStack(spacing: 14) {
+            ForEach(looks, id: \.0) { name, look, blink, wow in
+                VStack(spacing: 4) {
+                    Image(nsImage: MenuBarFace.watchImage(look: look, blink: blink, wow: wow))
+                        .renderingMode(.template)
+                        .resizable()
+                        .frame(width: 38 * 3, height: 20 * 3)
+                        .foregroundStyle(.white)
+                    Text(name).font(.caption).foregroundStyle(.white.opacity(0.6))
+                }
+            }
+        }
+        .padding(16)
+        .background(Color.black)
+        try save(row, as: "preview-14-watching-face.png")
+    }
+
     func testRenderTypePicker() throws {
         try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
         func row(_ text: String, chosen: ItemType? = nil) -> some View {
@@ -462,6 +490,25 @@ final class UIPreviewTests: XCTestCase {
                               colors: [theme.text, theme.text.opacity(0.6), theme.accent, theme.background])
             }
             .frame(width: size.width, height: size.height)
+            // The end: "Sayonara.", accepting its fate.
+            ZStack {
+                RoundedRectangle(cornerRadius: theme.cornerRadius, style: .continuous)
+                    .fill(theme.background.opacity(theme.backgroundOpacity))
+                VStack(spacing: 6) {
+                    KaomojiView(face: Kaomoji(eyes: .content, mouth: .smile, extra: .tears), color: theme.text)
+                        .frame(width: 128, height: 64)
+                    Text("Drink water").font(theme.titleFont).foregroundStyle(theme.text)
+                    Text("Sayonara.")
+                        .font(.system(size: theme.fontSize - 2, weight: .semibold).italic())
+                        .foregroundStyle(theme.text.opacity(0.9))
+                    Text("accepts fate")
+                        .font(.system(size: theme.fontSize - 3).italic())
+                        .foregroundStyle(theme.text.opacity(0.5))
+                }
+                .padding(.top, 10)
+                .frame(maxHeight: .infinity, alignment: .top)
+            }
+            .frame(width: size.width, height: size.height)
         }
         .padding(10)
         .background(Color(white: 0.5))
@@ -477,18 +524,19 @@ final class UIPreviewTests: XCTestCase {
         }
         var rng = SystemRandomNumberGenerator()
         let moods: [(String, Kaomoji.Mood)] = [("happy", .happy), ("calm", .calm), ("love", .love),
-                                                ("shocked", .shocked), ("sad", .sad), ("angry", .angry), ("dead", .dead)]
+                                                ("shocked", .shocked), ("sad", .sad), ("angry", .angry),
+                                                ("dead", .dead), ("cool", .cool), ("silly", .silly)]
         let sheet = VStack(alignment: .leading, spacing: 10) {
             Text("Eyes").foregroundStyle(.white)
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(88)), count: 9), spacing: 6) {
                 ForEach(Kaomoji.Eyes.allCases, id: \.self) { cell(Kaomoji(eyes: $0, mouth: .cat, extra: .none)) }
             }
             Text("Mouths").foregroundStyle(.white)
-            LazyVGrid(columns: Array(repeating: GridItem(.fixed(88)), count: 8), spacing: 6) {
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(88)), count: 9), spacing: 6) {
                 ForEach(Kaomoji.Mouth.allCases, id: \.self) { cell(Kaomoji(eyes: .dot, mouth: $0, extra: .none)) }
             }
             Text("Extras").foregroundStyle(.white)
-            HStack(spacing: 4) {
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(88)), count: 9), spacing: 6) {
                 ForEach(Kaomoji.Extra.allCases, id: \.self) { cell(Kaomoji(eyes: .bead, mouth: .smile, extra: $0)) }
             }
             ForEach(moods, id: \.0) { name, mood in

@@ -132,8 +132,27 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertTrue(allLines.allSatisfy { $0.count <= 48 }, "short enough for one line")
     }
 
+    func testMenuBarFaceLooksAtThePointer() {
+        let right = MenuBarFace.look(dx: 200, dy: 0)
+        XCTAssertEqual(right.dx, 1, accuracy: 0.001)
+        let below = MenuBarFace.look(dx: 0, dy: -200) // screen y is up
+        XCTAssertEqual(below.dy, 1, accuracy: 0.001, "pointer below the menu bar: pupils look down")
+        let close = MenuBarFace.look(dx: 15, dy: 0)
+        XCTAssertLessThan(close.dx, 0.5, "right next to it: only a small glance")
+        XCTAssertEqual(MenuBarFace.look(dx: 0, dy: 0), .zero)
+    }
+
+    func testPopupSettingsFromBeforeDismissStillLoad() throws {
+        let old = #"{"seconds":20}"#.data(using: .utf8)!
+        let settings = try JSONDecoder().decode(ReminderPopupSettings.self, from: old)
+        XCTAssertEqual(settings.seconds, 20, "the chosen time is kept")
+        XCTAssertEqual(settings.dismiss, .doubleClick)
+    }
+
     func testFaceKitHasOverAThousandFaces() {
-        XCTAssertGreaterThanOrEqual(Kaomoji.count, 1000)
+        XCTAssertGreaterThanOrEqual(Kaomoji.count, 7000)
+        XCTAssertGreaterThan(Kaomoji.variety(.silly), 100)
+        XCTAssertTrue(Kaomoji.Mood.allCases.allSatisfy { Kaomoji.variety($0) > 10 })
         for index in stride(from: 0, to: Kaomoji.count, by: 37) {
             XCTAssertFalse(Kaomoji.at(index).strokes.isEmpty)
         }

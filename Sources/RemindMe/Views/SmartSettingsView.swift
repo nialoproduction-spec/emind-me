@@ -9,6 +9,7 @@ struct SmartSettingsView: View {
     @ObservedObject private var goalNudge = AppSettings.goalNudge
     @ObservedObject private var breakTimer = AppSettings.breakTimer
     @ObservedObject private var reminderPopup = AppSettings.reminderPopup
+    @ObservedObject private var face = AppSettings.face
     @ObservedObject private var smart = AppSettings.smart
     @ObservedObject private var categories = AppSettings.categories
     @State private var newCategory = ""
@@ -16,6 +17,8 @@ struct SmartSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             reminderPopupSection
+            Divider()
+            faceSection
             Divider()
             snoozeSection
             Divider()
@@ -35,6 +38,18 @@ struct SmartSettingsView: View {
         }
         // Everything wraps to the sheet's width; nothing runs off the edges.
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Menu bar face
+
+    @ViewBuilder
+    private var faceSection: some View {
+        Text("Menu bar face").font(.headline)
+        Toggle("Wakes up and watches the pointer", isOn: $face.value.followPointer)
+        Text("Bring the pointer near it: it opens its eyes and follows you around.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: - Reminder popup
@@ -59,7 +74,12 @@ struct SmartSettingsView: View {
             }
             .controlSize(.small)
         }
-        Text("For reminders (no buttons). Click a popup to put it away sooner.")
+        Picker("Send off early with", selection: $reminderPopup.value.dismiss) {
+            ForEach(ReminderPopupSettings.Dismiss.allCases, id: \.self) { Text($0.label).tag($0) }
+        }
+        .pickerStyle(.menu)
+        .fixedSize()
+        Text("For reminders (no buttons). The small × in its corner always works too.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)

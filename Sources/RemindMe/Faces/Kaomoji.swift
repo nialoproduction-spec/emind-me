@@ -2,25 +2,28 @@ import SwiftUI
 
 /// Faces built from parts — eyes × mouth × an extra (tears, blush, anger
 /// mark…) — drawn in the same thick white line style as the traced faces, on
-/// the same 200 × 104 canvas. 18 eyes × 16 mouths × 7 extras = 2,016 faces.
+/// the same 200 × 104 canvas. 26 eyes × 27 mouths × 11 extras = 7,722 faces.
 /// Each part has moods, so a face can be asked for by feeling.
 struct Kaomoji: Hashable {
     enum Eyes: Int, CaseIterable {
         case dot, bead, ring, wide, line, happy, worried, caret, squint, cross,
-             spiral, angry, crying, star, heart, wink, sheepish, content
+             spiral, angry, crying, star, heart, wink, sheepish, content,
+             sparkly, shades, doubleLine, halfLid, glare, surprised, lashes, bored
     }
 
     enum Mouth: Int, CaseIterable {
         case cat, smile, open, frown, flat, small, gasp, kiss, squee, grin,
-             wavy, teeth, square, tongue, rage, meh
+             wavy, teeth, square, tongue, rage, meh,
+             laugh, scream, tongueOut, fangs, buckTeeth, drool, mustache, smirk, shout, zipped, puke
     }
 
     enum Extra: Int, CaseIterable {
-        case none, blush, tears, sweat, anger, sparkles, sleep
+        case none, blush, tears, sweat, anger, sparkles, sleep,
+             question, shock, waterfall, hearts
     }
 
     enum Mood: CaseIterable {
-        case happy, calm, angry, sad, shocked, dead, love
+        case happy, calm, angry, sad, shocked, dead, love, cool, silly
     }
 
     var eyes: Eyes
@@ -41,27 +44,33 @@ struct Kaomoji: Hashable {
     // MARK: - Moods
 
     private static let pools: [Mood: (eyes: [Eyes], mouths: [Mouth], extras: [Extra])] = [
-        .happy: ([.dot, .bead, .happy, .caret, .squint, .star, .wink, .content],
-                 [.cat, .smile, .open, .grin, .tongue, .squee],
-                 [.none, .none, .blush, .sparkles]),
-        .calm: ([.line, .content, .sheepish, .bead, .happy],
-                [.cat, .smile, .flat, .small],
+        .happy: ([.dot, .bead, .happy, .caret, .squint, .star, .wink, .content, .sparkly, .lashes],
+                 [.cat, .smile, .open, .grin, .tongue, .squee, .laugh, .tongueOut, .smirk],
+                 [.none, .none, .blush, .sparkles, .hearts]),
+        .calm: ([.line, .content, .sheepish, .bead, .happy, .doubleLine, .halfLid],
+                [.cat, .smile, .flat, .small, .smirk, .zipped],
                 [.none, .sleep, .blush]),
-        .angry: ([.angry, .squint, .line],
-                 [.frown, .teeth, .rage, .square, .flat],
-                 [.anger, .anger, .none, .sweat]),
-        .sad: ([.worried, .crying, .ring, .bead],
-               [.frown, .wavy, .square, .small, .meh],
-               [.tears, .tears, .sweat, .none]),
-        .shocked: ([.wide, .ring, .dot, .worried],
-                   [.gasp, .small, .wavy, .square],
-                   [.sweat, .none, .tears]),
+        .angry: ([.angry, .squint, .line, .glare],
+                 [.frown, .teeth, .rage, .square, .flat, .shout, .fangs],
+                 [.anger, .anger, .none, .sweat, .shock]),
+        .sad: ([.worried, .crying, .ring, .bead, .halfLid],
+               [.frown, .wavy, .square, .small, .meh, .scream],
+               [.tears, .tears, .sweat, .none, .waterfall]),
+        .shocked: ([.wide, .ring, .dot, .worried, .surprised],
+                   [.gasp, .small, .wavy, .square, .scream, .laugh],
+                   [.sweat, .none, .tears, .shock, .question]),
         .dead: ([.cross, .spiral],
-                [.wavy, .flat, .gasp, .tongue, .square],
+                [.wavy, .flat, .gasp, .tongue, .square, .tongueOut, .puke],
                 [.none, .sweat, .tears]),
-        .love: ([.heart, .happy, .star, .content],
-                [.smile, .kiss, .cat, .open],
-                [.blush, .sparkles, .blush]),
+        .love: ([.heart, .happy, .star, .content, .sparkly, .lashes],
+                [.smile, .kiss, .cat, .open, .laugh],
+                [.blush, .sparkles, .blush, .hearts]),
+        .cool: ([.shades, .halfLid, .glare],
+                [.smirk, .flat, .smile, .cat, .mustache],
+                [.none, .sparkles, .none]),
+        .silly: ([.squint, .wink, .dot, .spiral, .bored, .surprised],
+                 [.tongueOut, .buckTeeth, .drool, .mustache, .puke, .tongue, .fangs],
+                 [.none, .question, .sweat, .blush]),
     ]
 
     static func random(_ mood: Mood) -> Kaomoji {
@@ -90,6 +99,8 @@ struct Kaomoji: Hashable {
     struct Stroke {
         var path: Path
         var filled: Bool
+        /// Filled with holes (a shine in an eye, a tongue in a mouth).
+        var evenOdd = false
     }
 
     private static let left = CGPoint(x: 54, y: 40)
@@ -197,6 +208,45 @@ struct Kaomoji: Hashable {
             return [Stroke(path: p, filled: true)]
         case .wink:
             return [circle(c, 11, filled: true)]
+        case .sparkly:
+            // A big shiny eye: solid, with a highlight cut out of it.
+            var p = Path(ellipseIn: CGRect(x: c.x - 13, y: c.y - 13, width: 26, height: 26))
+            p.addEllipse(in: CGRect(x: c.x + 1, y: c.y - 9, width: 8, height: 8))
+            p.addEllipse(in: CGRect(x: c.x - 7, y: c.y + 3, width: 4, height: 4))
+            return [Stroke(path: p, filled: true, evenOdd: true)]
+        case .shades:
+            var lens = Path(roundedRect: CGRect(x: c.x - 22, y: c.y - 11, width: 44, height: 19), cornerRadius: 8)
+            if side < 0 {
+                lens.addRect(CGRect(x: c.x + 20, y: c.y - 11, width: 54, height: 5))
+            }
+            return [Stroke(path: lens, filled: true)]
+        case .doubleLine:
+            return [line([CGPoint(x: c.x - 17, y: c.y - 5), CGPoint(x: c.x + 17, y: c.y - 5)]),
+                    line([CGPoint(x: c.x - 17, y: c.y + 5), CGPoint(x: c.x + 17, y: c.y + 5)])]
+        case .halfLid:
+            var p = Path()
+            p.move(to: CGPoint(x: c.x - 14, y: c.y - 2))
+            p.addLine(to: CGPoint(x: c.x + 14, y: c.y - 2))
+            p.addArc(center: CGPoint(x: c.x, y: c.y - 2), radius: 14,
+                     startAngle: .degrees(0), endAngle: .degrees(180), clockwise: false)
+            p.closeSubpath()
+            return [Stroke(path: p, filled: true)]
+        case .glare:
+            return [line([CGPoint(x: c.x - 17, y: c.y - 6), CGPoint(x: c.x + 17, y: c.y - 6)]),
+                    circle(CGPoint(x: c.x, y: c.y + 3), 7, filled: true)]
+        case .surprised:
+            return [circle(CGPoint(x: c.x, y: c.y + 5), 8, filled: true),
+                    curve(CGPoint(x: c.x - 14, y: c.y - 12), CGPoint(x: c.x, y: c.y - 26), CGPoint(x: c.x + 14, y: c.y - 12))]
+        case .lashes:
+            let outer = side // toward the edge of the face
+            return [
+                curve(CGPoint(x: c.x - 16, y: c.y - 3), CGPoint(x: c.x, y: c.y + 15), CGPoint(x: c.x + 16, y: c.y - 3)),
+                line([CGPoint(x: c.x + 16 * outer, y: c.y - 3), CGPoint(x: c.x + 24 * outer, y: c.y - 10)]),
+                line([CGPoint(x: c.x + 9 * outer, y: c.y + 4), CGPoint(x: c.x + 15 * outer, y: c.y - 4)]),
+            ]
+        case .bored:
+            return [Stroke(path: Path(roundedRect: CGRect(x: c.x - 14, y: c.y - 4, width: 28, height: 9), cornerRadius: 4.5),
+                           filled: true)]
         case .sheepish:
             return ([-8, 0, 8] as [CGFloat]).map { dy in
                 line([CGPoint(x: c.x - 15, y: c.y + dy), CGPoint(x: c.x + 15, y: c.y + dy)])
@@ -269,7 +319,95 @@ struct Kaomoji: Hashable {
             return [Stroke(path: p, filled: false)]
         case .meh:
             return [line([CGPoint(x: m.x - 12, y: m.y + 3), CGPoint(x: m.x + 12, y: m.y - 3)])]
+        case .laugh:
+            // A big open laugh with the tongue showing.
+            var p = Path()
+            p.move(to: CGPoint(x: m.x - 19, y: m.y - 9))
+            p.addLine(to: CGPoint(x: m.x + 19, y: m.y - 9))
+            p.addQuadCurve(to: CGPoint(x: m.x - 19, y: m.y - 9), control: CGPoint(x: m.x, y: m.y + 28))
+            p.closeSubpath()
+            p.addEllipse(in: CGRect(x: m.x - 7, y: m.y + 1, width: 14, height: 9))
+            return [Stroke(path: p, filled: true, evenOdd: true)]
+        case .scream:
+            return [Stroke(path: Path(ellipseIn: CGRect(x: m.x - 10, y: m.y - 10, width: 20, height: 29)), filled: true)]
+        case .tongueOut:
+            return [curve(CGPoint(x: m.x - 15, y: m.y - 5), CGPoint(x: m.x, y: m.y + 7), CGPoint(x: m.x + 15, y: m.y - 5)),
+                    Stroke(path: Path(roundedRect: CGRect(x: m.x - 6, y: m.y, width: 12, height: 19), cornerRadius: 6),
+                           filled: true)]
+        case .fangs:
+            var teeth = Path()
+            for x in [m.x - 8, m.x + 8] {
+                teeth.move(to: CGPoint(x: x - 3.5, y: m.y + 1))
+                teeth.addLine(to: CGPoint(x: x + 3.5, y: m.y + 1))
+                teeth.addLine(to: CGPoint(x: x, y: m.y + 10))
+                teeth.closeSubpath()
+            }
+            return [curve(CGPoint(x: m.x - 17, y: m.y - 4), CGPoint(x: m.x, y: m.y + 8), CGPoint(x: m.x + 17, y: m.y - 4)),
+                    Stroke(path: teeth, filled: true)]
+        case .buckTeeth:
+            var p = Path()
+            p.move(to: CGPoint(x: m.x - 14, y: m.y - 3))
+            p.addLine(to: CGPoint(x: m.x + 14, y: m.y - 3))
+            p.addRoundedRect(in: CGRect(x: m.x - 7, y: m.y - 3, width: 14, height: 11), cornerSize: CGSize(width: 2, height: 2))
+            p.move(to: CGPoint(x: m.x, y: m.y - 3))
+            p.addLine(to: CGPoint(x: m.x, y: m.y + 8))
+            return [Stroke(path: p, filled: false)]
+        case .drool:
+            var drop = Path()
+            let top = CGPoint(x: m.x + 12, y: m.y + 2)
+            drop.move(to: top)
+            drop.addQuadCurve(to: CGPoint(x: m.x + 12, y: m.y + 20), control: CGPoint(x: m.x + 4, y: m.y + 17))
+            drop.addQuadCurve(to: top, control: CGPoint(x: m.x + 20, y: m.y + 17))
+            return [curve(CGPoint(x: m.x - 14, y: m.y - 5), CGPoint(x: m.x, y: m.y + 9), CGPoint(x: m.x + 14, y: m.y - 5)),
+                    Stroke(path: drop, filled: true)]
+        case .mustache:
+            var p = Path()
+            for dir in [CGFloat(-1), 1] {
+                p.move(to: CGPoint(x: m.x, y: m.y - 4))
+                p.addQuadCurve(to: CGPoint(x: m.x + 20 * dir, y: m.y + 1), control: CGPoint(x: m.x + 9 * dir, y: m.y + 8))
+                p.addQuadCurve(to: CGPoint(x: m.x + 22 * dir, y: m.y - 9), control: CGPoint(x: m.x + 28 * dir, y: m.y - 3))
+            }
+            return [Stroke(path: p, filled: false)]
+        case .smirk:
+            return [curve(CGPoint(x: m.x - 13, y: m.y + 2), CGPoint(x: m.x + 5, y: m.y + 7), CGPoint(x: m.x + 15, y: m.y - 7))]
+        case .shout:
+            var p = Path()
+            p.addLines([CGPoint(x: m.x - 16, y: m.y + 10), CGPoint(x: m.x + 16, y: m.y + 10), CGPoint(x: m.x, y: m.y - 11)])
+            p.closeSubpath()
+            return [Stroke(path: p, filled: true)]
+        case .zipped:
+            var p = Path()
+            p.move(to: CGPoint(x: m.x - 17, y: m.y))
+            p.addLine(to: CGPoint(x: m.x + 17, y: m.y))
+            for dx: CGFloat in [-11, -4, 3, 10] {
+                p.move(to: CGPoint(x: m.x + dx, y: m.y - 4))
+                p.addLine(to: CGPoint(x: m.x + dx, y: m.y + 4))
+            }
+            return [Stroke(path: p, filled: false)]
+        case .puke:
+            var p = Path()
+            for dx: CGFloat in [-6, 0, 6] {
+                p.move(to: CGPoint(x: m.x + dx, y: m.y + 4))
+                p.addLine(to: CGPoint(x: m.x + dx, y: m.y + 36))
+            }
+            return [circle(CGPoint(x: m.x, y: m.y - 2), 9, filled: false), Stroke(path: p, filled: false)]
         }
+    }
+
+    /// A small filled heart centred on `c`.
+    private static func heart(at c: CGPoint, size s: CGFloat) -> Stroke {
+        var p = Path()
+        p.move(to: CGPoint(x: c.x, y: c.y + s))
+        p.addCurve(to: CGPoint(x: c.x - s, y: c.y - s * 0.3), control1: CGPoint(x: c.x - s * 0.5, y: c.y + s * 0.5),
+                   control2: CGPoint(x: c.x - s, y: c.y + s * 0.2))
+        p.addCurve(to: CGPoint(x: c.x, y: c.y - s * 0.4), control1: CGPoint(x: c.x - s, y: c.y - s),
+                   control2: CGPoint(x: c.x - s * 0.2, y: c.y - s))
+        p.addCurve(to: CGPoint(x: c.x + s, y: c.y - s * 0.3), control1: CGPoint(x: c.x + s * 0.2, y: c.y - s),
+                   control2: CGPoint(x: c.x + s, y: c.y - s))
+        p.addCurve(to: CGPoint(x: c.x, y: c.y + s), control1: CGPoint(x: c.x + s, y: c.y + s * 0.2),
+                   control2: CGPoint(x: c.x + s * 0.5, y: c.y + s * 0.5))
+        p.closeSubpath()
+        return Stroke(path: p, filled: true)
     }
 
     /// A little "z" for a sleeping face.
@@ -333,6 +471,32 @@ struct Kaomoji: Hashable {
             }
         case .sleep:
             return [zee(at: CGPoint(x: 168, y: 18), size: 11), zee(at: CGPoint(x: 184, y: 2), size: 8)]
+        case .question:
+            var p = Path()
+            p.move(to: CGPoint(x: 171, y: 13))
+            p.addQuadCurve(to: CGPoint(x: 184, y: 10), control: CGPoint(x: 175, y: 1))
+            p.addQuadCurve(to: CGPoint(x: 178, y: 25), control: CGPoint(x: 193, y: 19))
+            p.addLine(to: CGPoint(x: 178, y: 28))
+            return [Stroke(path: p, filled: false), circle(CGPoint(x: 178, y: 36), 3, filled: true)]
+        case .shock:
+            return [line([CGPoint(x: 174, y: 4), CGPoint(x: 174, y: 22)]), circle(CGPoint(x: 174, y: 30), 3, filled: true),
+                    line([CGPoint(x: 186, y: 4), CGPoint(x: 186, y: 22)]), circle(CGPoint(x: 186, y: 30), 3, filled: true)]
+        case .waterfall:
+            return [left, right].map { c in
+                var p = Path()
+                var y = c.y + 12
+                let x = c.x + 2
+                p.move(to: CGPoint(x: x, y: y))
+                var flip: CGFloat = 1
+                while y < 100 {
+                    p.addQuadCurve(to: CGPoint(x: x, y: y + 10), control: CGPoint(x: x + 5 * flip, y: y + 5))
+                    y += 10
+                    flip = -flip
+                }
+                return Stroke(path: p, filled: false)
+            }
+        case .hearts:
+            return [heart(at: CGPoint(x: 178, y: 14), size: 10), heart(at: CGPoint(x: 191, y: 32), size: 6.5)]
         }
     }
 }
@@ -353,7 +517,7 @@ struct KaomojiView: View {
             let style = StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
             for stroke in face.strokes {
                 if stroke.filled {
-                    context.fill(stroke.path, with: .color(color))
+                    context.fill(stroke.path, with: .color(color), style: FillStyle(eoFill: stroke.evenOdd))
                 } else {
                     context.stroke(stroke.path, with: .color(color), style: style)
                 }
@@ -374,7 +538,7 @@ struct LivelyKaomojiView: View {
     @State private var up = false
 
     private var shown: Kaomoji {
-        guard blinking, ![.cross, .spiral, .heart, .star].contains(face.eyes) else { return face }
+        guard blinking, ![.cross, .spiral, .heart, .star, .shades].contains(face.eyes) else { return face }
         var closed = face
         closed.eyes = .line
         return closed

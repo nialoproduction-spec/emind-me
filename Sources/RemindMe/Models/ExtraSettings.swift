@@ -77,6 +77,33 @@ struct GoalNudgeSettings: Codable, Equatable {
 struct ReminderPopupSettings: Codable, Equatable {
     /// How long a reminder's popup stays, in seconds. 0 = until clicked.
     var seconds = 10
+    /// How to send it off early (the small × always works too).
+    var dismiss = Dismiss.doubleClick
+
+    enum Dismiss: String, Codable, CaseIterable {
+        case doubleClick, hover
+
+        var label: String {
+            switch self {
+            case .doubleClick: return "Double-click"
+            case .hover: return "Rest the pointer on it"
+            }
+        }
+    }
+
+    init(seconds: Int = 10, dismiss: Dismiss = .doubleClick) {
+        self.seconds = seconds
+        self.dismiss = dismiss
+    }
+
+    private enum CodingKeys: String, CodingKey { case seconds, dismiss }
+
+    /// Settings saved before `dismiss` existed still load.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        seconds = try c.decodeIfPresent(Int.self, forKey: .seconds) ?? 10
+        dismiss = try c.decodeIfPresent(Dismiss.self, forKey: .dismiss) ?? .doubleClick
+    }
 
     static let choices = [5, 10, 20, 30, 60, 0]
 
@@ -87,6 +114,13 @@ struct ReminderPopupSettings: Codable, Equatable {
         default: return "\(seconds) seconds"
         }
     }
+}
+
+// MARK: - Menu bar face
+
+struct FaceSettings: Codable, Equatable {
+    /// The menu bar face wakes up when the pointer comes near and watches it.
+    var followPointer = true
 }
 
 // MARK: - Break timer
@@ -208,6 +242,7 @@ enum AppSettings {
     static let goalNudge = PersistedSettings(key: "goalNudge.v1", default: GoalNudgeSettings())
     static let breakTimer = PersistedSettings(key: "breakTimer.v1", default: BreakTimerSettings())
     static let reminderPopup = PersistedSettings(key: "reminderPopup.v1", default: ReminderPopupSettings())
+    static let face = PersistedSettings(key: "faceSettings.v1", default: FaceSettings())
     static let smart = PersistedSettings(key: "smartSettings.v1", default: SmartSettings())
     static let categories = PersistedSettings(key: "categorySettings.v1", default: CategorySettings())
 }

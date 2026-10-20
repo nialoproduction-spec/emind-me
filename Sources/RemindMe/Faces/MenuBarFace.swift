@@ -57,6 +57,9 @@ enum HoverReaction: String, CaseIterable {
 
 /// Draws and animates the menu bar icon:
 /// - idle: the —ω— logo, unchanged (it's the sleepy face);
+/// - pointer comes near: it wakes up ("wow!", eyebrows up), opens its eyes
+///   and watches the pointer wherever it goes, blinking now and then; falls
+///   back asleep a moment after the pointer leaves;
 /// - pointer over it: wakes up with a random reaction, then back to the logo
 ///   once the pointer leaves;
 /// - a reminder waiting for an answer: shows that reminder's mood face
@@ -75,9 +78,18 @@ final class MenuBarFace {
 
     private enum State {
         case idle
+        case watching
         case hover(HoverReaction, start: Date)
         case reminder(FaceMood, start: Date)
     }
+    private var proximity: Task<Void, Never>?
+    private var wokeAt = Date.distantPast
+    private var lastNear = Date.distantPast
+
+    /// How close (in points) the pointer has to come to wake it.
+    nonisolated static let wakeDistance: CGFloat = 220
+    /// Asleep again this long after the pointer has gone.
+    nonisolated static let sleepAfter: TimeInterval = 1.4
     private var state: State = .idle
     private var pointerInside = false
     private var lastReaction: HoverReaction?
@@ -104,13 +116,125 @@ final class MenuBarFace {
             .receive(on: RunLoop.main)
             .sink { [weak self] occurrence in self?.reminderChanged(occurrence) }
             .store(in: &cancellables)
+
+        // Watches where the pointer is: a cheap check ten times a second,
+        // thirty while it's awake and following the pointer.
+        proximity = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let wait = self.watchStep()
+                try? await Task.sleep(for: .milliseconds(wait))
+            }
+        }
+    }
+
+    // MARK: - Watching the pointer
+
+    private func watchStep() -> Int {
+        guard AppSettings.face.value.followPointer,
+              let frame = button?.window?.frame, frame.width > 0 else {
+            if case .watching = state { goIdle() }
+            return 400
+        }
+        let mouse = NSEvent.mouseLocation
+        let dx = mouse.x - frame.midX
+        let dy = mouse.y - frame.midY
+        let distance = hypot(dx, dy)
+        let near = distance < Self.wakeDistance
+        let now = Date()
+        if near { lastNear = now }
+
+        switch state {
+        case .idle:
+            guard near else { return 100 }
+            state = .watching
+            wokeAt = now
+            drawWatching(dx: dx, dy: dy, now: now)
+            return 33
+        case .watching:
+            if !near, now.timeIntervalSince(lastNear) > Self.sleepAfter {
+                goIdle()
+                return 100
+            }
+            drawWatching(dx: dx, dy: dy, now: now)
+            return 33
+        case .hover, .reminder:
+            return 150 // those draw themselves
+        }
+    }
+
+    private func drawWatching(dx: CGFloat, dy: CGFloat, now: Date) {
+        let awake = now.timeIntervalSince(wokeAt)
+        let look = Self.look(dx: dx, dy: dy)
+        let wow = awake < 0.7
+        // A quick blink every ~4 seconds.
+        let blink = !wow && awake.truncatingRemainder(dividingBy: 4.1) > 3.97
+        show(key: "watch|\(Int(look.dx * 8))|\(Int(look.dy * 8))|\(blink)|\(wow)",
+             image: Self.watchImage(look: look, blink: blink, wow: wow))
+    }
+
+    /// Where the pupils point: toward the pointer (screen y is up, the image
+    /// is drawn y-down), full strength once it's more than ~60 pt away.
+    nonisolated static func look(dx: CGFloat, dy: CGFloat) -> CGVector {
+        let distance = hypot(dx, dy)
+        guard distance > 0.5 else { return .zero }
+        let strength = min(1, distance / 60)
+        return CGVector(dx: dx / distance * strength, dy: -dy / distance * strength)
+    }
+
+    /// The awake face for the menu bar: two round eyes whose pupils point
+    /// along `look` (each axis -1…1), a little ω mouth; "wow" right after
+    /// waking: eyebrows up and an O mouth. Blinking: closed eyes.
+    nonisolated static func watchImage(look: CGVector, blink: Bool, wow: Bool) -> NSImage {
+        template { ctx, _ in
+            ctx.setStrokeColor(NSColor.black.cgColor)
+            ctx.setFillColor(NSColor.black.cgColor)
+            ctx.setLineCap(.round)
+            ctx.setLineJoin(.round)
+            let eyes = [CGPoint(x: 11.5, y: 9.5), CGPoint(x: 26.5, y: 9.5)]
+            let radius: CGFloat = 5.2
+            for eye in eyes {
+                if blink {
+                    ctx.setLineWidth(1.7)
+                    ctx.move(to: CGPoint(x: eye.x - 5, y: eye.y + 0.5))
+                    ctx.addLine(to: CGPoint(x: eye.x + 5, y: eye.y + 0.5))
+                    ctx.strokePath()
+                    continue
+                }
+                ctx.setLineWidth(1.5)
+                ctx.strokeEllipse(in: CGRect(x: eye.x - radius, y: eye.y - radius, width: radius * 2, height: radius * 2))
+                let reach: CGFloat = 2.5
+                let pupil = CGPoint(x: eye.x + look.dx * reach, y: eye.y + look.dy * reach)
+                let r: CGFloat = wow ? 1.9 : 2.4
+                ctx.fillEllipse(in: CGRect(x: pupil.x - r, y: pupil.y - r, width: r * 2, height: r * 2))
+                if wow {
+                    ctx.setLineWidth(1.3)
+                    ctx.move(to: CGPoint(x: eye.x - 4, y: 2.2))
+                    ctx.addQuadCurve(to: CGPoint(x: eye.x + 4, y: 2.2), control: CGPoint(x: eye.x, y: -0.6))
+                    ctx.strokePath()
+                }
+            }
+            ctx.setLineWidth(1.3)
+            if wow {
+                ctx.strokeEllipse(in: CGRect(x: 17.4, y: 13.6, width: 3.2, height: 4))
+            } else {
+                ctx.move(to: CGPoint(x: 15.6, y: 15))
+                ctx.addQuadCurve(to: CGPoint(x: 19, y: 15.6), control: CGPoint(x: 17.3, y: 18.2))
+                ctx.addQuadCurve(to: CGPoint(x: 22.4, y: 15), control: CGPoint(x: 20.7, y: 18.2))
+                ctx.strokePath()
+            }
+        }
     }
 
     // MARK: - Events
 
     private func pointerEntered() {
         pointerInside = true
-        guard case .idle = state else { return } // a waiting reminder's face takes priority
+        // A waiting reminder's face takes priority; idle or watching, react.
+        switch state {
+        case .idle, .watching: break
+        default: return
+        }
         let reaction = HoverReaction.random(excluding: lastReaction)
         lastReaction = reaction
         state = .hover(reaction, start: Date())
@@ -167,7 +291,7 @@ final class MenuBarFace {
     private func step() -> Int? {
         let now = Date()
         switch state {
-        case .idle:
+        case .idle, .watching:
             return nil
         case .hover(let reaction, let start):
             let t = now.timeIntervalSince(start)
