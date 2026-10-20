@@ -8,12 +8,15 @@ struct SmartSettingsView: View {
     @ObservedObject private var weekly = AppSettings.weekly
     @ObservedObject private var goalNudge = AppSettings.goalNudge
     @ObservedObject private var breakTimer = AppSettings.breakTimer
+    @ObservedObject private var reminderPopup = AppSettings.reminderPopup
     @ObservedObject private var smart = AppSettings.smart
     @ObservedObject private var categories = AppSettings.categories
     @State private var newCategory = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            reminderPopupSection
+            Divider()
             snoozeSection
             Divider()
             goalSection
@@ -30,6 +33,33 @@ struct SmartSettingsView: View {
             Divider()
             categoriesSection
         }
+    }
+
+    // MARK: - Reminder popup
+
+    @ViewBuilder
+    private var reminderPopupSection: some View {
+        Text("Reminder popup").font(.headline)
+        HStack {
+            Picker("Stays on screen for", selection: $reminderPopup.value.seconds) {
+                ForEach(ReminderPopupSettings.choices, id: \.self) { seconds in
+                    Text(ReminderPopupSettings.label(seconds)).tag(seconds)
+                }
+            }
+            .pickerStyle(.menu)
+            .fixedSize()
+            Button("Try it") {
+                NoticePillController.shared.show(
+                    ReminderScheduler.popupContent(title: "Drink water", schedule: "every 40 minutes",
+                                                   category: "Health", settings: reminderPopup.value)
+                )
+            }
+            .controlSize(.small)
+        }
+        Text("For reminders (no buttons). Click a popup to put it away sooner.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: - Snooze
@@ -52,7 +82,7 @@ struct SmartSettingsView: View {
                 .controlSize(.small)
             }
         }
-        Text("A habit's card shows these as buttons (up to three). The shortest is used by \(GlobalHotkeys.label(for: .snooze)) and the S key.")
+        Text("A habit's Snooze button uses the shortest (also \(GlobalHotkeys.label(for: .snooze)) and the S key). Right-click Snooze for the others.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)

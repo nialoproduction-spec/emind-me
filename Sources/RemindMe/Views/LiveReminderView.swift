@@ -61,12 +61,6 @@ struct LiveReminderView: View {
             }
             .disabled(reaction != nil)
 
-            if smart.value.globalShortcuts {
-                Text(shortcutHint)
-                    .font(.system(size: 9.5))
-                    .foregroundStyle(theme.text.opacity(0.35))
-                    .lineLimit(1)
-            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -82,23 +76,24 @@ struct LiveReminderView: View {
         }
     }
 
-    /// Done, the snooze lengths as their own buttons (5m / 10m / 30m by
-    /// default, one tap), and Skip.
+    /// Three buttons, nothing else: Done, Snooze (the shortest length, 5m by
+    /// default; right-click it for the others) and Skip. Shortcuts are in
+    /// the tooltips.
     private var mainRow: some View {
-        HStack(spacing: 6) {
+        let shortest = presets.first ?? 5
+        return HStack(spacing: 8) {
             actionButton("Done", icon: "checkmark.circle.fill", tint: theme.accent, action: done)
                 .keyboardShortcut(.return, modifiers: [])
                 .help("Done — \(GlobalHotkeys.label(for: .done))")
-            ForEach(Array(presets.prefix(3).enumerated()), id: \.element) { index, minutes in
-                let button = actionButton(SnoozeSettings.label(minutes), icon: "moon.zzz.fill",
-                                          tint: theme.text.opacity(0.85)) { snooze(minutes: minutes) }
-                    .help("Snooze \(SnoozeSettings.label(minutes))")
-                if index == 0 {
-                    button.keyboardShortcut("s", modifiers: [])
-                } else {
-                    button
+            actionButton("Snooze \(SnoozeSettings.label(shortest))", icon: "moon.zzz.fill",
+                         tint: theme.text.opacity(0.85)) { snooze(minutes: shortest) }
+                .keyboardShortcut("s", modifiers: [])
+                .help("Snooze \(SnoozeSettings.label(shortest)) — \(GlobalHotkeys.label(for: .snooze)). Right-click for longer.")
+                .contextMenu {
+                    ForEach(presets, id: \.self) { minutes in
+                        Button("Snooze \(SnoozeSettings.label(minutes))") { snooze(minutes: minutes) }
+                    }
                 }
-            }
             actionButton("Skip", icon: "arrow.uturn.forward.circle", tint: theme.text.opacity(0.6), action: skip)
                 .keyboardShortcut("k", modifiers: [])
                 .help("Skip — \(GlobalHotkeys.label(for: .skip))")

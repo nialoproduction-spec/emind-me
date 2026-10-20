@@ -97,6 +97,7 @@ final class ReminderScheduler: ObservableObject {
     private let goalNudgeSettings: PersistedSettings<GoalNudgeSettings>
     /// Shows a small popup (quiet reminders, the goal check-in).
     private let showNotice: @MainActor (NoticeContent) -> Void
+    private let popupSettings: PersistedSettings<ReminderPopupSettings>
 
     private var escalation: EscalationSettings { escalationSettings() }
 
@@ -110,7 +111,8 @@ final class ReminderScheduler: ObservableObject {
         resumed: (@MainActor (Item) -> Void)? = nil,
         weeklySettings: PersistedSettings<WeeklySummarySettings>? = nil,
         goalNudgeSettings: PersistedSettings<GoalNudgeSettings>? = nil,
-        showNotice: (@MainActor (NoticeContent) -> Void)? = nil
+        showNotice: (@MainActor (NoticeContent) -> Void)? = nil,
+        popupSettings: PersistedSettings<ReminderPopupSettings>? = nil
     ) {
         self.presenter = presenter ?? ReminderPanelController.shared
         self.clock = now ?? { Date.now }
@@ -122,6 +124,7 @@ final class ReminderScheduler: ObservableObject {
         self.weeklySettings = weeklySettings ?? AppSettings.weekly
         self.goalNudgeSettings = goalNudgeSettings ?? AppSettings.goalNudge
         self.showNotice = showNotice ?? { NoticePillController.shared.show($0) }
+        self.popupSettings = popupSettings ?? AppSettings.reminderPopup
     }
 
     func start(modelContext: ModelContext) {
@@ -251,9 +254,24 @@ final class ReminderScheduler: ObservableObject {
         }
         item.nextFireDate = next
         guard !held else { return }
-        showNotice(NoticeContent(title: item.title, detail: "due now", duration: 6))
+        showNotice(Self.popupContent(title: item.title, schedule: item.scheduleSummary,
+                                     category: item.category, settings: popupSettings.value))
     }
 
+
+    /// A reminder's popup: "Drink water", "Every 40 minutes", its category,
+    /// staying as long as Settings says (or until clicked).
+    nonisolated static func popupContent(title: String, schedule: String, category: String?,
+                                         settings: ReminderPopupSettings) -> NoticeContent {
+        let line = schedule.isEmpty ? "Due now" : schedule.prefix(1).uppercased() + schedule.dropFirst()
+        return NoticeContent(
+            title: title,
+            detail: line,
+            category: category,
+            sticky: settings.seconds == 0,
+            duration: TimeInterval(max(settings.seconds, 1))
+        )
+    }
 
     // MARK: - Goal check-in
 

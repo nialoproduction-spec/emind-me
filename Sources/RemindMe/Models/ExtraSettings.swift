@@ -71,6 +71,23 @@ struct GoalNudgeSettings: Codable, Equatable {
     var lastShownDayKey: String?
 }
 
+// MARK: - Reminder popup
+
+struct ReminderPopupSettings: Codable, Equatable {
+    /// How long a reminder's popup stays, in seconds. 0 = until clicked.
+    var seconds = 10
+
+    static let choices = [5, 10, 20, 30, 60, 0]
+
+    static func label(_ seconds: Int) -> String {
+        switch seconds {
+        case 0: return "Until I click it"
+        case 60: return "1 minute"
+        default: return "\(seconds) seconds"
+        }
+    }
+}
+
 // MARK: - Break timer
 
 struct BreakTimerSettings: Codable, Equatable {
@@ -130,6 +147,7 @@ enum AppSettings {
     static let weekly = PersistedSettings(key: "weeklySummarySettings.v1", default: WeeklySummarySettings())
     static let goalNudge = PersistedSettings(key: "goalNudge.v1", default: GoalNudgeSettings())
     static let breakTimer = PersistedSettings(key: "breakTimer.v1", default: BreakTimerSettings())
+    static let reminderPopup = PersistedSettings(key: "reminderPopup.v1", default: ReminderPopupSettings())
     static let smart = PersistedSettings(key: "smartSettings.v1", default: SmartSettings())
     static let categories = PersistedSettings(key: "categorySettings.v1", default: CategorySettings())
 }

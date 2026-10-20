@@ -52,8 +52,9 @@ Sources/RemindMe/
     PersistenceController.swift  ModelContainer
   Panel/
     ReminderPanel.swift          borderless non-activating NSPanel
-    NoticePill.swift             reminders' popup, macOS-notification style (frosted glass, blue bell,
-                                 time in bold, "Drink water due now"), where the panel's pill goes
+    NoticePill.swift             reminders' popup, macOS-notification style (frosted glass, blue bell
+                                 tile, title + "now", schedule + category, run-down line), where the
+                                 panel's pill goes; stays `ReminderPopupSettings.seconds` (0 = until clicked)
     BreakIsland.swift            the break timer's home, at the camera notch: one look per state (face +
                                  "Working" / "Break" + countdown, or "Break over · Waiting"); work
                                  countdown kept or hidden (`BreakTimerSettings.keepWorkCountdown`);
@@ -125,8 +126,8 @@ Design/, scripts/trace_faces.py  source art + the tracer that generated Faces/Fa
 - The type is never picked by hand: a time in the text → Reminder, none → Goal. The Habit button
   beside the send arrow (⌘↩) saves it as a habit. "remind me to" and typos of "every" / units are
   cleaned up by the parser first.
-- Rows show "N total" and "N days in a row". A habit card offers the snooze lengths as buttons
-  (5m / 10m / 30m by default).
+- Rows show "N total" and "N days in a row". A habit card has three buttons only: Done, Snooze
+  (shortest length; right-click for the others), Skip.
 - All sounds are off. Don't add any.
 - Typing shows a live preview (with the type chooser) above the field; Enter saves at once.
 - The break timer is listed in its own "Break timer" section (`BreakTimerSection`): `stop()` greys it

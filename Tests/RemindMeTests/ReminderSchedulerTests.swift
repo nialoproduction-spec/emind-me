@@ -32,6 +32,7 @@ final class ReminderSchedulerTests: XCTestCase {
     private var weekly: PersistedSettings<WeeklySummarySettings>!
     private var goalNudge: PersistedSettings<GoalNudgeSettings>!
     private var notices: [NoticeContent] = []
+    private var popup: PersistedSettings<ReminderPopupSettings>!
     private var scheduler: ReminderScheduler!
 
     /// Fresh in-memory store + scheduler for each test (XCTest makes a new
@@ -45,6 +46,7 @@ final class ReminderSchedulerTests: XCTestCase {
         presenter = FakePresenter()
         weekly = .testing(WeeklySummarySettings(isEnabled: false))
         goalNudge = .testing(GoalNudgeSettings(isEnabled: false))
+        popup = .testing(ReminderPopupSettings())
         scheduler = ReminderScheduler(
             presenter: presenter,
             now: { [unowned self] in self.clock },
@@ -55,7 +57,8 @@ final class ReminderSchedulerTests: XCTestCase {
             resumed: { [unowned self] in self.resumedTitles.append($0.title) },
             weeklySettings: weekly,
             goalNudgeSettings: goalNudge,
-            showNotice: { [unowned self] in self.notices.append($0) }
+            showNotice: { [unowned self] in self.notices.append($0) },
+            popupSettings: popup
         )
         scheduler.attach(modelContext: context)
     }
@@ -90,6 +93,26 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertEqual(notices.map(\.title), ["Drink water"])
         XCTAssertNotNil(item.nextFireDate)
         XCTAssertGreaterThan(item.nextFireDate ?? .distantPast, clock)
+    }
+
+    func testReminderPopupStaysAsLongAsSettingsSay() throws {
+        try makeFixture()
+        popup.value.seconds = 20
+        let item = addRepeating(everyMinutes: 40, title: "Drink water")
+        item.styleRaw = ReminderStyle.justRemind.rawValue
+        item.category = "Health"
+        advance(minutes: 1)
+        scheduler.tick()
+        let shown = try XCTUnwrap(notices.last)
+        XCTAssertEqual(shown.duration, 20)
+        XCTAssertFalse(shown.sticky)
+        XCTAssertEqual(shown.detail, "Every 40 minutes")
+        XCTAssertEqual(shown.category, "Health")
+
+        let untilClicked = ReminderScheduler.popupContent(
+            title: "Stretch", schedule: "", category: nil, settings: ReminderPopupSettings(seconds: 0))
+        XCTAssertTrue(untilClicked.sticky, "0 = stays until clicked")
+        XCTAssertEqual(untilClicked.detail, "Due now")
     }
 
     func testJustRemindIsHeldWhileFocusIsOn() throws {
