@@ -520,7 +520,7 @@ struct ExpandedPanelView: View {
 
     private var inputRow: some View {
         HStack(spacing: 8) {
-            TextField("Drink water every 40 minutes #health", text: $draft.text)
+            TextField("Drink water every 40 min", text: $draft.text)
                 .textFieldStyle(.plain)
                 .font(theme.font)
                 .foregroundStyle(theme.text)

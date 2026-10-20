@@ -113,7 +113,7 @@ struct RGBColor: Codable, Equatable, Hashable {
 
     static let black = RGBColor(r: 0, g: 0, b: 0)
     static let white = RGBColor(r: 1, g: 1, b: 1)
-    static let ink = RGBColor(r: 0.09, g: 0.11, b: 0.15)
+    static let ink = RGBColor(r: 0.06, g: 0.08, b: 0.13)
     /// The soft blue for breaks (#C5D2E5).
     static let breakBlue = RGBColor(r: 0.773, g: 0.824, b: 0.898)
     static let awayRed = RGBColor(r: 1.0, g: 0.27, b: 0.23)

@@ -395,7 +395,7 @@ final class UIPreviewTests: XCTestCase {
             var parsed: ParsedItem? = text.isEmpty ? nil : ItemParser.parse(text)
             parsed?.chosen = chosen
             return HStack(spacing: 8) {
-                Text(text.isEmpty ? "Drink water every 40 minutes #health" : text)
+                Text(text.isEmpty ? "Drink water every 40 min" : text)
                     .font(theme.font)
                     .foregroundStyle(theme.text.opacity(text.isEmpty ? 0.35 : 1))
                 Spacer()

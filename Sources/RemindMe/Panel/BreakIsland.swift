@@ -147,7 +147,7 @@ struct IslandView: View {
                     HStack(spacing: 7) {
                         if let face = content.face { IslandFace(face: face, tone: content.tone ?? .work) }
                         Text(content.title)
-                            .font(.system(size: IslandGeometry.font, weight: .semibold))
+                            .font(.system(size: IslandGeometry.font, weight: .semibold, design: .rounded))
                     }
                     .foregroundStyle(palette.leftText.color)
                     .lineLimit(1)
@@ -159,7 +159,7 @@ struct IslandView: View {
                     HStack(spacing: 7) {
                         if let detail = content.detail {
                             Text(detail)
-                                .font(.system(size: IslandGeometry.font))
+                                .font(.system(size: IslandGeometry.font, design: .rounded))
                                 .foregroundStyle(palette.text.color.opacity(0.8))
                         }
                         if let end = content.countdownTo { Countdown(end: end, color: palette.time.color) }
@@ -194,7 +194,9 @@ struct IslandGlass: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var pulse = false
 
-    static let tintOpacity = 0.74
+    /// Light colours (the break blue) go on thicker so they stay bright and
+    /// keep their colour over a dark menu bar; dark ones stay see-through.
+    var tintOpacity: Double { palette.background.isLight ? 0.92 : 0.78 }
 
     private var shape: UnevenRoundedRectangle {
         UnevenRoundedRectangle(
@@ -219,15 +221,18 @@ struct IslandGlass: View {
                         withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { pulse = true }
                     }
             }
-            // Sheen: light on top, fading down, like curved glass.
-            LinearGradient(colors: [Color.white.opacity(0.22), Color.white.opacity(0.0)],
-                           startPoint: .top, endPoint: .center)
+            // A faint sheen: light catching the top of curved glass.
+            LinearGradient(colors: [Color.white.opacity(0.10), Color.white.opacity(0.0)],
+                           startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.45))
         }
         .clipShape(shape)
-        // Lit rim: brighter along the bottom curve where light gathers.
+        // Lit rim only where light gathers, along the bottom curve; it
+        // fades out up the sides, so there's no outline box.
         .overlay(
             shape.strokeBorder(
-                LinearGradient(colors: [Color.white.opacity(0.08), Color.white.opacity(0.42)],
+                LinearGradient(stops: [.init(color: .clear, location: 0),
+                                       .init(color: .clear, location: 0.45),
+                                       .init(color: Color.white.opacity(0.32), location: 1)],
                                startPoint: .top, endPoint: .bottom),
                 lineWidth: 1
             )
@@ -241,7 +246,7 @@ struct IslandGlass: View {
         #if compiler(>=6.2)
         if #available(macOS 26.0, *), liveBlur {
             Rectangle().fill(.clear)
-                .glassEffect(.regular.tint(tint.opacity(Self.tintOpacity)), in: shape)
+                .glassEffect(.regular.tint(tint.opacity(tintOpacity)), in: shape)
         } else {
             fallbackBase(tint)
         }
@@ -254,7 +259,7 @@ struct IslandGlass: View {
     private func fallbackBase(_ tint: Color) -> some View {
         ZStack {
             if liveBlur { SystemBlur() }
-            Rectangle().fill(tint.opacity(Self.tintOpacity))
+            Rectangle().fill(tint.opacity(tintOpacity))
         }
     }
 }
@@ -321,7 +326,7 @@ private struct FaceGlyph: View {
             .renderingMode(.template)
             .resizable()
             .aspectRatio(contentMode: .fit)
-            .frame(height: 11)
+            .frame(height: 13)
     }
 }
 
@@ -331,7 +336,7 @@ private struct Countdown: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             Text(BreakCycleState.clockString(end.timeIntervalSince(context.date)))
-                .font(.system(size: IslandGeometry.font, weight: .semibold).monospacedDigit())
+                .font(.system(size: IslandGeometry.font, weight: .bold, design: .rounded).monospacedDigit())
                 .foregroundStyle(color)
         }
     }
@@ -344,7 +349,7 @@ private struct CountUp: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             Text(BreakCycleState.elapsedString(context.date.timeIntervalSince(start)))
-                .font(.system(size: IslandGeometry.font, weight: .semibold).monospacedDigit())
+                .font(.system(size: IslandGeometry.font, weight: .bold, design: .rounded).monospacedDigit())
                 .foregroundStyle(color)
         }
     }
@@ -524,10 +529,10 @@ final class BreakIslandController {
             ceil((text as NSString).size(withAttributes: [.font: font]).width)
         }
         let gap: CGFloat = 7
-        let left = width(content.title, semibold) + (content.face == nil ? 0 : 28 + gap)
+        let left = width(content.title, semibold) + (content.face == nil ? 0 : 34 + gap)
         var right: CGFloat = 0
         if let detail = content.detail { right += width(detail, regular) }
-        let digits = NSFont.monospacedDigitSystemFont(ofSize: IslandGeometry.font, weight: .semibold)
+        let digits = NSFont.monospacedDigitSystemFont(ofSize: IslandGeometry.font, weight: .bold)
         if let end = content.countdownTo {
             right += (right > 0 ? gap : 0) + width(end.timeIntervalSinceNow >= 3600 ? "0:00:00" : "00:00", digits)
         }

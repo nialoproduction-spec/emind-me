@@ -81,7 +81,7 @@ final class NoticePillController {
     static let shared = NoticePillController()
 
     /// The habit card's width; shorter, with no buttons.
-    static let size = CGSize(width: ReminderPanelController.liveReminderSize.width, height: 172)
+    static let size = CGSize(width: ReminderPanelController.liveReminderSize.width, height: 150)
 
     private var panel: ReminderPanel?
     private var hosting: NSHostingView<AnyView>?
