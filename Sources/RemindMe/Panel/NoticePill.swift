@@ -24,51 +24,140 @@ struct NoticeContent: Equatable {
     var id = UUID()
 }
 
-/// A reminder's popup: the same card as a habit's (the panel's own look and
-/// theme, the animated face, the title) but with no buttons — just a short
-/// quote under the title. Click it to put it away.
+/// Tells a popup it's time to go out dramatically (hovered or clicked).
+@MainActor
+final class PopupLife: ObservableObject {
+    @Published var dying = false
+}
+
+/// A reminder's popup: the habit card's look (the panel's theme), a lively
+/// face from the face kit, the title and a short quote, no buttons. Hover
+/// over it (or click) and it dies dramatically: the face goes x_x, it says
+/// its last words, shakes, and dissolves into bits.
 struct NoticePillView: View {
     let content: NoticeContent
+    @ObservedObject var life: PopupLife
     var onTap: () -> Void = {}
+    /// Called when the dissolve has finished, to take the window away.
+    var onDied: () -> Void = {}
 
     @ObservedObject private var themeStore = ThemeStore.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var face = Kaomoji.random([.happy, .happy, .love, .calm, .shocked].randomElement()!)
+    @State private var lastWords: String?
+    @State private var shake: Double = 0
+    @State private var dissolve: CGFloat = 0
+    @State private var bits = DissolveBit.burst(count: 46)
 
     var body: some View {
         let theme = themeStore.theme
-        VStack(spacing: 6) {
-            AnimatedFaceView(mood: .gentle, color: theme.text)
+        let shape = RoundedRectangle(cornerRadius: theme.cornerRadius, style: .continuous)
+        ZStack {
+            VStack(spacing: 6) {
+                LivelyKaomojiView(face: face, color: theme.text)
+                    .frame(width: 128, height: 64)
 
-            Text(content.title)
-                .font(theme.titleFont)
-                .foregroundStyle(theme.text)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity)
-
-            if let quote = content.detail {
-                Text("“\(quote)”")
-                    .font(.system(size: max(theme.fontSize - 2, 10)).italic())
-                    .foregroundStyle(theme.text.opacity(0.55))
+                Text(content.title)
+                    .font(theme.titleFont)
+                    .foregroundStyle(theme.text)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity)
+
+                if let line = lastWords ?? content.detail {
+                    Text(lastWords == nil ? "“\(line)”" : line)
+                        .font(.system(size: max(theme.fontSize - 2, 10), weight: lastWords == nil ? .regular : .semibold)
+                            .italic())
+                        .foregroundStyle(theme.text.opacity(lastWords == nil ? 0.55 : 0.9))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            .padding(.bottom, 14)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(
+                shape.fill(theme.background.opacity(theme.backgroundOpacity))
+                    .overlay(shape.strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+            )
+            .clipShape(shape)
+            .rotationEffect(.degrees(shake))
+            .scaleEffect(1 - 0.12 * dissolve)
+            .blur(radius: 8 * dissolve)
+            .opacity(Double(max(0, 1 - dissolve * 1.8)))
+
+            // The bits it falls apart into.
+            DissolveField(bits: bits, progress: dissolve,
+                          colors: [theme.text, theme.text.opacity(0.6), theme.accent, theme.background])
+                .allowsHitTesting(false)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { life.dying = true }
+        .onChange(of: life.dying) {
+            if life.dying { Task { await die() } }
+        }
+    }
+
+    @MainActor private func die() async {
+        guard lastWords == nil else { return }
+        face = Kaomoji.random(.dead)
+        lastWords = ReminderQuotes.lastWords.randomElement()
+        if !reduceMotion {
+            for angle in [-5.0, 4.5, -3.5, 3, -2, 0] {
+                withAnimation(.easeInOut(duration: 0.07)) { shake = angle }
+                try? await Task.sleep(for: .milliseconds(70))
+            }
+            try? await Task.sleep(for: .milliseconds(380))
+            withAnimation(.easeIn(duration: 0.95)) { dissolve = 1 }
+            try? await Task.sleep(for: .milliseconds(1000))
+        } else {
+            try? await Task.sleep(for: .milliseconds(700))
+        }
+        onDied()
+    }
+}
+
+/// One fleck of a dissolving popup: where it starts (0…1 across the card),
+/// which way it flies, how big it is and which colour.
+struct DissolveBit: Identifiable {
+    let id: Int
+    let start: CGPoint
+    let drift: CGSize
+    let size: CGFloat
+    let colorIndex: Int
+
+    static func burst(count: Int) -> [DissolveBit] {
+        (0..<count).map { i in
+            let start = CGPoint(x: .random(in: 0.05...0.95), y: .random(in: 0.08...0.92))
+            // Mostly up and outward, like ash in a draught.
+            let drift = CGSize(width: (start.x - 0.5) * .random(in: 60...160) + .random(in: -20...20),
+                               height: -.random(in: 30...120))
+            return DissolveBit(id: i, start: start, drift: drift, size: .random(in: 2...6),
+                               colorIndex: Int.random(in: 0..<4))
+        }
+    }
+}
+
+struct DissolveField: View {
+    let bits: [DissolveBit]
+    let progress: CGFloat
+    let colors: [Color]
+
+    var body: some View {
+        GeometryReader { geo in
+            ForEach(bits) { bit in
+                RoundedRectangle(cornerRadius: 1.2)
+                    .fill(colors[bit.colorIndex % colors.count])
+                    .frame(width: bit.size, height: bit.size)
+                    .rotationEffect(.degrees(Double(progress) * 220 * (bit.id.isMultiple(of: 2) ? 1 : -1)))
+                    .position(x: bit.start.x * geo.size.width + bit.drift.width * progress,
+                              y: bit.start.y * geo.size.height + bit.drift.height * progress)
+                    // Appear as the card goes, then fade out as they drift.
+                    .opacity(Double(min(1, progress * 5) * (1 - progress)))
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 10)
-        .padding(.bottom, 14)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(
-            RoundedRectangle(cornerRadius: theme.cornerRadius, style: .continuous)
-                .fill(theme.background.opacity(theme.backgroundOpacity))
-                .overlay(
-                    RoundedRectangle(cornerRadius: theme.cornerRadius, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
-                )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: theme.cornerRadius, style: .continuous))
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onTap)
     }
 }
 
@@ -86,7 +175,9 @@ final class NoticePillController {
     private var panel: ReminderPanel?
     private var hosting: NSHostingView<AnyView>?
     private var hideTask: Task<Void, Never>?
+    private var hoverTask: Task<Void, Never>?
     private var generation = 0
+    private var life = PopupLife()
 
     private init() {}
 
@@ -94,8 +185,13 @@ final class NoticePillController {
         let panel = ensurePanel()
         generation += 1
         hideTask?.cancel()
+        let life = PopupLife()
+        self.life = life
+        let shownGeneration = generation
         hosting?.rootView = AnyView(
-            NoticePillView(content: content, onTap: { [weak self] in self?.hide() }).id(content.id)
+            NoticePillView(content: content, life: life,
+                           onDied: { [weak self] in self?.vanish(ifGeneration: shownGeneration) })
+                .id(content.id)
         )
         let target = targetFrame(size: Self.size)
         if !panel.isVisible {
@@ -114,9 +210,10 @@ final class NoticePillController {
             fade(to: 1, duration: 0.18)
         }
 
+        watchForHover(life: life, generation: shownGeneration)
+
         if !content.sticky {
             let seconds = content.duration
-            let shownGeneration = generation
             hideTask = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(seconds))
                 guard !Task.isCancelled else { return }
@@ -129,10 +226,43 @@ final class NoticePillController {
         hide(ifGeneration: nil)
     }
 
+    /// Hovering over the popup kills it (dramatically). Only once the
+    /// pointer has been outside it first, so a popup that appears right
+    /// under the pointer isn't killed before it's read.
+    private func watchForHover(life: PopupLife, generation shown: Int) {
+        hoverTask?.cancel()
+        hoverTask = Task { [weak self] in
+            var wasOutside = false
+            try? await Task.sleep(for: .milliseconds(600))
+            while !Task.isCancelled {
+                guard let self, self.generation == shown, let panel = self.panel, panel.isVisible else { return }
+                let inside = panel.frame.contains(NSEvent.mouseLocation)
+                if !inside { wasOutside = true }
+                if inside, wasOutside, !life.dying {
+                    life.dying = true
+                    self.hideTask?.cancel() // it leaves by dying now
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(80))
+            }
+        }
+    }
+
+    /// After the dissolve: gone at once (it already faded itself).
+    private func vanish(ifGeneration expected: Int) {
+        guard let panel, expected == generation else { return }
+        hoverTask?.cancel()
+        hideTask?.cancel()
+        generation += 1
+        panel.orderOut(nil)
+        panel.alphaValue = 1
+    }
+
     private func hide(ifGeneration expected: Int?) {
         guard let panel, panel.isVisible else { return }
         if let expected, expected != generation { return } // replaced by a newer popup
         hideTask?.cancel()
+        hoverTask?.cancel()
         generation += 1
         let mine = generation
         NSAnimationContext.runAnimationGroup({ context in

@@ -41,6 +41,12 @@ struct LiveReminderView: View {
 
     private var presets: [Int] { snoozeSettings.value.presets.sorted() }
 
+    /// A line for this habit, the same one for as long as this card is up.
+    private var quote: String {
+        let bytes = occurrence.id.uuid
+        return ReminderQuotes.habitQuote(for: occurrence.item?.title ?? "", pick: Int(bytes.0) * 256 + Int(bytes.1))
+    }
+
     var body: some View {
         VStack(spacing: 8) {
             AnimatedFaceView(mood: mood, color: theme.text, wakeToken: occurrence.remindersSentCount)
@@ -51,6 +57,11 @@ struct LiveReminderView: View {
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
                 .frame(maxWidth: .infinity)
+
+            Text("“\(quote)”")
+                .font(.system(size: max(theme.fontSize - 3, 9.5)).italic())
+                .foregroundStyle(theme.text.opacity(0.5))
+                .lineLimit(1)
 
             Group {
                 if choosingSnooze {

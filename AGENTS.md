@@ -52,12 +52,14 @@ Sources/RemindMe/
     PersistenceController.swift  ModelContainer
   Panel/
     ReminderPanel.swift          borderless non-activating NSPanel
-    NoticePill.swift             reminders' popup: the habit card's look (theme, animated face, title)
-                                 with no buttons, a short quote (ReminderQuotes) instead; where the
-                                 panel's pill goes; stays `ReminderPopupSettings.seconds` (0 = until clicked)
-    BreakIsland.swift            the break timer's home, at the camera notch: liquid glass (Apple's on
-                                 macOS 26 + Xcode 26, blur + tint + lit rim otherwise), living faces
-                                 (blink / bob / angry shake); "Working" / "Break" + countdown, or
+    NoticePill.swift             reminders' popup: the habit card's look (theme, a face-kit face, title)
+                                 with no buttons, a short quote (ReminderQuotes) instead; hover (after the
+                                 pointer was outside) or click = dramatic death (x_x face, last words,
+                                 shake, dissolve into bits); stays `ReminderPopupSettings.seconds`
+    BreakIsland.swift            the break timer's home, at the camera notch: solid colours (the pick
+                                 shows exactly; glass was tried and dropped), living faces (blink /
+                                 sleepy bob + drifting z's / angry shake), breathing break with
+                                 rotating prompts; "Working" / "Break" + countdown, or
                                  "Come back!" with a red pulsing left side and red +time away; work
                                  countdown kept or hidden (`BreakTimerSettings.keepWorkCountdown`);
                                  colours per state (`IslandPalette`: work black, break #C5D2E5, time
@@ -71,7 +73,8 @@ Sources/RemindMe/
     LiveReminderView.swift       the pop-up card: face, Done / Snooze (lengths) / Skip
     EditItemView, ItemHistoryView, WeeklySummaryView, SmartSettingsView, ThemeSettingsView,
     ManageRemindersView, ReminderRowView, ChecklistRowView, CollapsedPillView, EndOfDaySummaryView
-  Faces/                         24 traced kaomoji faces, animation, menu bar face
+  Faces/                         24 traced kaomoji faces, animation, menu bar face; Kaomoji.swift = the
+                                 face kit (eyes × mouths × extras = 2,016 faces, by mood) for popups
 Tests/RemindMeTests/             XCTest; UIPreviewTests renders PNGs when PREVIEW_DIR is set (CI attaches
                                  them to the release: look at them after any visual change)
 Design/, scripts/trace_faces.py  source art + the tracer that generated Faces/FaceArt.swift

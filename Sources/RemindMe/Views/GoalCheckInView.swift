@@ -11,6 +11,7 @@ struct GoalCheckInView: View {
     let theme: PanelTheme
 
     @ObservedObject private var scheduler = ReminderScheduler.shared
+    @State private var quote = ReminderQuotes.goal.randomElement() ?? ""
 
     private var waiting: [Item] {
         GoalCheckIn.unanswered(goals: items, occurrences: occurrences, now: .now)
@@ -39,6 +40,9 @@ struct GoalCheckInView: View {
             Text("Did you do these today?")
                 .font(theme.font)
                 .foregroundStyle(theme.text.opacity(0.6))
+            Text("“\(quote)”")
+                .font(.system(size: max(theme.fontSize - 2, 10)).italic())
+                .foregroundStyle(theme.text.opacity(0.45))
 
             if waiting.isEmpty {
                 Spacer()

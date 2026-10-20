@@ -365,7 +365,7 @@ final class UIPreviewTests: XCTestCase {
         return ZStack(alignment: .top) {
             LinearGradient(colors: [Color(red: 0.13, green: 0.15, blue: 0.22), Color(red: 0.05, green: 0.05, blue: 0.08)],
                            startPoint: .topLeading, endPoint: .bottomTrailing)
-            IslandView(model: model, liveBlur: false)
+            IslandView(model: model)
                 .frame(width: width + 40, height: 37)
             UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 9, bottomTrailingRadius: 9,
                                    topTrailingRadius: 0, style: .continuous)
@@ -382,7 +382,10 @@ final class UIPreviewTests: XCTestCase {
             island(NoticeContent(title: "Working", countdownTo: now.addingTimeInterval(38 * 60 + 12),
                                  face: .smug, tone: .work, sticky: true))
             island(NoticeContent(title: "Break", countdownTo: now.addingTimeInterval(8 * 60 + 54),
-                                 face: .happy, tone: .onBreak, sticky: true))
+                                 face: .sleepy, tone: .onBreak, sticky: true))
+            island(NoticeContent(title: "Break", countdownTo: now.addingTimeInterval(8 * 60 + 54),
+                                 face: .sleepy, tone: .onBreak, sticky: true),
+                   settings: { var s = BreakTimerSettings(); s.breakColor = .awayRed; return s }())
             island(NoticeContent(title: "Come back!", countUpFrom: now.addingTimeInterval(-192),
                                  face: .furious, tone: .away, sticky: true))
         }
@@ -436,10 +439,67 @@ final class UIPreviewTests: XCTestCase {
 
     func testRenderReminderPopup() throws {
         try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
-        let popup = NoticePillView(content: NoticeContent(title: "Drink water", detail: "Stay hydrated, stay sharp."))
-            .frame(width: NoticePillController.size.width, height: NoticePillController.size.height)
-            .padding(10)
-            .background(Color(white: 0.5))
+        let size = NoticePillController.size
+        let popup = HStack(spacing: 10) {
+            NoticePillView(content: NoticeContent(title: "Drink water", detail: "Stay hydrated, stay sharp."),
+                           life: PopupLife())
+                .frame(width: size.width, height: size.height)
+            // Mid-dissolve: the dead face, its last words, the bits flying off.
+            ZStack {
+                RoundedRectangle(cornerRadius: theme.cornerRadius, style: .continuous)
+                    .fill(theme.background.opacity(theme.backgroundOpacity))
+                    .opacity(0.35)
+                VStack(spacing: 6) {
+                    KaomojiView(face: Kaomoji(eyes: .cross, mouth: .wavy, extra: .tears), color: theme.text)
+                        .frame(width: 128, height: 64)
+                    Text("Tell my family I loved them.")
+                        .font(.system(size: theme.fontSize - 2, weight: .semibold).italic())
+                        .foregroundStyle(theme.text.opacity(0.9))
+                }
+                .opacity(0.5)
+                .blur(radius: 3)
+                DissolveField(bits: DissolveBit.burst(count: 46), progress: 0.45,
+                              colors: [theme.text, theme.text.opacity(0.6), theme.accent, theme.background])
+            }
+            .frame(width: size.width, height: size.height)
+        }
+        .padding(10)
+        .background(Color(white: 0.5))
         try save(popup, as: "preview-reminder-popup.png")
+    }
+
+    /// The face kit: every eye, every mouth, every extra, then a row of
+    /// random faces for each mood.
+    func testRenderFaceKit() throws {
+        try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
+        func cell(_ face: Kaomoji) -> some View {
+            KaomojiView(face: face, color: .white).frame(width: 84, height: 44)
+        }
+        var rng = SystemRandomNumberGenerator()
+        let moods: [(String, Kaomoji.Mood)] = [("happy", .happy), ("calm", .calm), ("love", .love),
+                                                ("shocked", .shocked), ("sad", .sad), ("angry", .angry), ("dead", .dead)]
+        let sheet = VStack(alignment: .leading, spacing: 10) {
+            Text("Eyes").foregroundStyle(.white)
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(88)), count: 9), spacing: 6) {
+                ForEach(Kaomoji.Eyes.allCases, id: \.self) { cell(Kaomoji(eyes: $0, mouth: .cat, extra: .none)) }
+            }
+            Text("Mouths").foregroundStyle(.white)
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(88)), count: 8), spacing: 6) {
+                ForEach(Kaomoji.Mouth.allCases, id: \.self) { cell(Kaomoji(eyes: .dot, mouth: $0, extra: .none)) }
+            }
+            Text("Extras").foregroundStyle(.white)
+            HStack(spacing: 4) {
+                ForEach(Kaomoji.Extra.allCases, id: \.self) { cell(Kaomoji(eyes: .bead, mouth: .smile, extra: $0)) }
+            }
+            ForEach(moods, id: \.0) { name, mood in
+                Text(name).foregroundStyle(.white)
+                HStack(spacing: 4) {
+                    ForEach(0..<9, id: \.self) { _ in cell(Kaomoji.random(mood, using: &rng)) }
+                }
+            }
+        }
+        .padding(16)
+        .background(Color(white: 0.14))
+        try save(sheet, as: "preview-13-face-kit.png")
     }
 }

@@ -91,6 +91,12 @@ enum BreakIslandRules {
         }
     }
 
+    /// On a break the title gently cycles through these, one every few
+    /// seconds, so the break feels like a break.
+    static let breakPrompts = ["Break", "Breathe in", "Look far away", "Stretch a bit",
+                               "Sip some water", "Rest your eyes", "Unclench your jaw"]
+    static let promptSeconds: TimeInterval = 9
+
     /// Whether the running timer stays at the notch between the moments it
     /// announces. Breaks (and "Break over") always do; the work countdown
     /// only when it's kept there.
@@ -104,7 +110,7 @@ enum BreakIslandRules {
         case .work:
             return NoticeContent(title: "Working", countdownTo: state.phaseEnd, face: .smug, tone: .work, sticky: true)
         case .onBreak:
-            return NoticeContent(title: "Break", countdownTo: state.phaseEnd, face: .happy, tone: .onBreak, sticky: true)
+            return NoticeContent(title: "Break", countdownTo: state.phaseEnd, face: .sleepy, tone: .onBreak, sticky: true)
         case .waiting:
             return BreakCycleManager.waitingNotice(for: state)
         }
@@ -129,16 +135,14 @@ final class IslandModel: ObservableObject {
 struct IslandView: View {
     @ObservedObject var model: IslandModel
     var onTap: () -> Void = {}
-    /// The real blur behind the glass. Off for preview images, which can't
-    /// draw AppKit views.
-    var liveBlur = true
 
     var body: some View {
         let notch = model.notch
         let wing = model.isOpen ? model.wing : 0
         let palette = model.palette
+        let onBreak = model.content?.tone == .onBreak
         ZStack(alignment: .top) {
-            IslandGlass(palette: palette, wing: wing, middle: notch.middleWidth, liveBlur: liveBlur)
+            IslandSurface(palette: palette, wing: wing, middle: notch.middleWidth, breathing: onBreak)
                 .frame(width: notch.middleWidth + wing * 2, height: notch.height)
                 .opacity(model.isOpen || notch.hasNotch ? 1 : 0)
 
@@ -146,8 +150,12 @@ struct IslandView: View {
                 HStack(spacing: 0) {
                     HStack(spacing: 7) {
                         if let face = content.face { IslandFace(face: face, tone: content.tone ?? .work) }
-                        Text(content.title)
-                            .font(.system(size: IslandGeometry.font, weight: .semibold, design: .rounded))
+                        if onBreak && content.title == "Break" {
+                            BreakPrompt()
+                        } else {
+                            Text(content.title)
+                                .font(.system(size: IslandGeometry.font, weight: .semibold, design: .rounded))
+                        }
                     }
                     .foregroundStyle(palette.leftText.color)
                     .lineLimit(1)
@@ -170,7 +178,6 @@ struct IslandView: View {
                     .frame(width: wing, alignment: .leading)
                 }
                 .frame(height: notch.height)
-                .clipped()
                 .opacity(model.isOpen ? 1 : 0)
                 .id("\(content.title)|\(content.detail ?? "")|\(content.countdownTo?.timeIntervalSinceReferenceDate ?? 0)")
                 .transition(.opacity)
@@ -182,21 +189,35 @@ struct IslandView: View {
     }
 }
 
-/// The glass itself. On macOS 26 built with Xcode 26, Apple's own Liquid
-/// Glass; otherwise the system blur with a tint, a lit rim along the edges
-/// and a soft sheen on top, so it reads as glass rather than paint.
-struct IslandGlass: View {
+/// "Break", then "Breathe in", "Look far away"… one every few seconds,
+/// fading from one to the next.
+private struct BreakPrompt: View {
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: BreakIslandRules.promptSeconds)) { context in
+            let prompts = BreakIslandRules.breakPrompts
+            let index = Int(context.date.timeIntervalSinceReferenceDate / BreakIslandRules.promptSeconds) % prompts.count
+            Text(prompts[index])
+                .font(.system(size: IslandGeometry.font, weight: .semibold, design: .rounded))
+                .id(index)
+                .transition(.opacity)
+                .animation(.easeInOut(duration: 0.5), value: index)
+        }
+    }
+}
+
+/// The island's body: solid colour (so the colour you pick is the colour
+/// you get), a faint sheen on top and a soft light along the bottom curve.
+/// On a break it slowly breathes, brightening and dimming over 8 seconds.
+/// Away after a break, the left side runs red and pulses.
+struct IslandSurface: View {
     let palette: IslandPalette
     let wing: CGFloat
     let middle: CGFloat
-    var liveBlur = true
+    var breathing = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var pulse = false
-
-    /// Light colours (the break blue) go on thicker so they stay bright and
-    /// keep their colour over a dark menu bar; dark ones stay see-through.
-    var tintOpacity: Double { palette.background.isLight ? 0.92 : 0.78 }
+    @State private var breathe = false
 
     private var shape: UnevenRoundedRectangle {
         UnevenRoundedRectangle(
@@ -210,71 +231,38 @@ struct IslandGlass: View {
 
     var body: some View {
         ZStack(alignment: .leading) {
-            base
-            // Away: the left side runs red, breathing in and out.
+            Rectangle().fill(palette.background.color)
+            if breathing {
+                Rectangle().fill(Color.white.opacity(breathe ? 0.16 : 0))
+            }
             if let alarm = palette.leftWing {
                 Rectangle()
-                    .fill(alarm.color.opacity(pulse ? 0.95 : 0.6))
+                    .fill(alarm.color.opacity(pulse ? 1 : 0.62))
                     .frame(width: wing + middle / 2)
                     .onAppear {
                         guard !reduceMotion else { pulse = true; return }
                         withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { pulse = true }
                     }
             }
-            // A faint sheen: light catching the top of curved glass.
-            LinearGradient(colors: [Color.white.opacity(0.10), Color.white.opacity(0.0)],
-                           startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.45))
+            LinearGradient(colors: [Color.white.opacity(0.07), Color.white.opacity(0)],
+                           startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.5))
         }
         .clipShape(shape)
-        // Lit rim only where light gathers, along the bottom curve; it
-        // fades out up the sides, so there's no outline box.
         .overlay(
             shape.strokeBorder(
                 LinearGradient(stops: [.init(color: .clear, location: 0),
-                                       .init(color: .clear, location: 0.45),
-                                       .init(color: Color.white.opacity(0.32), location: 1)],
+                                       .init(color: .clear, location: 0.5),
+                                       .init(color: Color.white.opacity(0.22), location: 1)],
                                startPoint: .top, endPoint: .bottom),
                 lineWidth: 1
             )
         )
-        .shadow(color: .black.opacity(0.35), radius: 6, y: 3)
-    }
-
-    @ViewBuilder
-    private var base: some View {
-        let tint = palette.background.color
-        #if compiler(>=6.2)
-        if #available(macOS 26.0, *), liveBlur {
-            Rectangle().fill(.clear)
-                .glassEffect(.regular.tint(tint.opacity(tintOpacity)), in: shape)
-        } else {
-            fallbackBase(tint)
-        }
-        #else
-        fallbackBase(tint)
-        #endif
-    }
-
-    @ViewBuilder
-    private func fallbackBase(_ tint: Color) -> some View {
-        ZStack {
-            if liveBlur { SystemBlur() }
-            Rectangle().fill(tint.opacity(tintOpacity))
+        .shadow(color: .black.opacity(0.3), radius: 5, y: 2)
+        .task(id: breathing) {
+            guard breathing, !reduceMotion else { breathe = false; return }
+            withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) { breathe = true }
         }
     }
-}
-
-/// The blurred backdrop behind the glass.
-private struct SystemBlur: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = .hudWindow
-        view.blendingMode = .behindWindow
-        view.state = .active
-        return view
-    }
-
-    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
 }
 
 /// The little face, alive: working, it blinks now and then; on a break it
@@ -292,6 +280,9 @@ struct IslandFace: View {
         FaceGlyph(face: blinking ? .sleepy : face)
             .offset(y: tone == .onBreak ? (bob ? -1.2 : 1.2) : 0)
             .rotationEffect(.degrees(shake))
+            .overlay(alignment: .topTrailing) {
+                if tone == .onBreak { FloatingZs().offset(x: 9, y: -5) }
+            }
             .task(id: tone) { await animate() }
     }
 
@@ -316,6 +307,31 @@ struct IslandFace: View {
                 try? await Task.sleep(for: .seconds(1.6))
             }
         }
+    }
+}
+
+/// Two little z's drifting up from a resting face.
+private struct FloatingZs: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var rise = false
+
+    var body: some View {
+        ZStack {
+            z(size: 7, delay: 0)
+            z(size: 5.5, delay: 1.1)
+        }
+        .onAppear {
+            guard !reduceMotion else { return }
+            rise = true
+        }
+    }
+
+    private func z(size: CGFloat, delay: Double) -> some View {
+        Text("z")
+            .font(.system(size: size, weight: .heavy, design: .rounded))
+            .offset(x: rise ? 5 : 0, y: rise ? -9 : 0)
+            .opacity(reduceMotion ? 0.8 : (rise ? 0 : 0.95))
+            .animation(.easeOut(duration: 2.2).repeatForever(autoreverses: false).delay(delay), value: rise)
     }
 }
 
@@ -529,7 +545,8 @@ final class BreakIslandController {
             ceil((text as NSString).size(withAttributes: [.font: font]).width)
         }
         let gap: CGFloat = 7
-        let left = width(content.title, semibold) + (content.face == nil ? 0 : 34 + gap)
+        let titles = content.tone == .onBreak && content.title == "Break" ? BreakIslandRules.breakPrompts : [content.title]
+        let left = (titles.map { width($0, semibold) }.max() ?? 0) + (content.face == nil ? 0 : 34 + gap)
         var right: CGFloat = 0
         if let detail = content.detail { right += width(detail, regular) }
         let digits = NSFont.monospacedDigitSystemFont(ofSize: IslandGeometry.font, weight: .bold)

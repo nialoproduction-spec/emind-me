@@ -371,7 +371,7 @@ final class BreakCycleManager: ObservableObject {
     }
 
     static func breakStartNotice(for state: BreakCycleState) -> NoticeContent {
-        NoticeContent(title: "Break", countdownTo: state.phaseEnd, face: .happy, tone: .onBreak, duration: 8)
+        NoticeContent(title: "Break", countdownTo: state.phaseEnd, face: .sleepy, tone: .onBreak, duration: 8)
     }
 
     /// Break's over and nobody's at the Mac: an angry face and "Come back!"
@@ -394,7 +394,7 @@ final class BreakCycleManager: ObservableObject {
         return NoticeContent(
             title: onBreak ? "Break" : "Working",
             countdownTo: state.phaseEnd,
-            face: onBreak ? .happy : .smug,
+            face: onBreak ? .sleepy : .smug,
             tone: onBreak ? .onBreak : .work,
             sticky: milestone == .lastSeconds,
             duration: 6

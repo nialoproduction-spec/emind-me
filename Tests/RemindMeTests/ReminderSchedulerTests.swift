@@ -118,8 +118,31 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertTrue(ReminderQuotes.choices(for: "Drink water").contains("Stay hydrated, stay sharp."))
         XCTAssertTrue(ReminderQuotes.choices(for: "Stretch my back").contains("Motion is lotion."))
         XCTAssertTrue(ReminderQuotes.choices(for: "Rest my eyes").contains("Blink. Breathe. Back to it."))
-        XCTAssertTrue(ReminderQuotes.choices(for: "Export the Sharma teaser").contains("Small steps, every day."),
+        XCTAssertTrue(ReminderQuotes.choices(for: "Renew passport").contains("Small steps, every day."),
                       "anything else gets a general one")
+        XCTAssertTrue(ReminderQuotes.choices(for: "Export the Sharma teaser").contains("Back it up before it backs out."),
+                      "editing work gets editing lines")
+        XCTAssertGreaterThanOrEqual(ReminderQuotes.total, 200, "lots of lines")
+        XCTAssertTrue(ReminderQuotes.habit.contains(ReminderQuotes.habitQuote(for: "Renew passport", pick: 3)))
+        XCTAssertFalse(ReminderQuotes.goal.isEmpty)
+        XCTAssertFalse(ReminderQuotes.lastWords.isEmpty)
+        let allLines = ReminderQuotes.topics.flatMap(\.quotes) + ReminderQuotes.general + ReminderQuotes.habit
+            + ReminderQuotes.goal + ReminderQuotes.lastWords
+        XCTAssertFalse(allLines.contains { $0.contains("—") || $0.contains("–") }, "plain punctuation only")
+        XCTAssertTrue(allLines.allSatisfy { $0.count <= 48 }, "short enough for one line")
+    }
+
+    func testFaceKitHasOverAThousandFaces() {
+        XCTAssertGreaterThanOrEqual(Kaomoji.count, 1000)
+        for index in stride(from: 0, to: Kaomoji.count, by: 37) {
+            XCTAssertFalse(Kaomoji.at(index).strokes.isEmpty)
+        }
+        var seen = Set<Kaomoji>()
+        for _ in 0..<300 { seen.insert(Kaomoji.random(.happy)) }
+        XCTAssertGreaterThan(seen.count, 40, "random happy faces actually vary")
+        XCTAssertGreaterThan(Kaomoji.variety(.angry), 20)
+        let dead = Kaomoji.random(.dead)
+        XCTAssertTrue([.cross, .spiral].contains(dead.eyes), "a dead face has x or spiral eyes")
         XCTAssertFalse(ReminderQuotes.quote(for: "Drink water", pick: -7).isEmpty, "any pick works")
     }
 
