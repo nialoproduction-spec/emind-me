@@ -495,11 +495,45 @@ enum ReminderQuotes {
         "Show up for your goals.",
     ]
 
-    /// What a reminder says as it's dismissed by hovering over it.
+    /// What a reminder's popup huffs when its time runs out while you're
+    /// busy typing or moving the pointer (it was ignored).
+    static let ignoredWords = [
+        "Ignored again…",
+        "Fine. Ignore me.",
+        "Wow. Okay.",
+        "I see how it is.",
+        "Too busy for me, huh?",
+        "Typing away like I'm not here.",
+        "Not even a glance?",
+        "I'll remember this.",
+        "Hello? I'm right here!",
+        "Cool. Cool cool cool.",
+        "You saw me. Don't lie.",
+        "Unbelievable.",
+        "Ghosted. By a human.",
+        "I'm telling your future self.",
+        "Keep typing then.",
+        "Rude!",
+        "And I dressed up for this.",
+        "Talk to the trackpad.",
+        "Seen. Not answered.",
+        "Left on read. Again.",
+        "Whatever. I'm leaving.",
+        "You'll miss me.",
+        "Hmph!",
+        "That's it. I'm out.",
+        "Busy, busy, busy.",
+        "Don't come crying later.",
+        "So that's how it is.",
+        "My feelings? Hurt.",
+        "I waited. You typed.",
+        "Ignored by my own human.",
+    ]
+
+    /// What a reminder says as it's sent off (clicked or hovered away).
     static let lastWords = [
         "Fine. I'll go.",
         "Tell my family I loved them.",
-        "Ignored again…",
         "I was only trying to help!",
         "Nooooo!",
         "Remember me.",
@@ -564,6 +598,6 @@ enum ReminderQuotes {
     }
 
     static var total: Int {
-        topics.reduce(0) { $0 + $1.quotes.count } + general.count + habit.count + goal.count + lastWords.count
+        topics.reduce(0) { $0 + $1.quotes.count } + general.count + habit.count + goal.count + lastWords.count + ignoredWords.count
     }
 }

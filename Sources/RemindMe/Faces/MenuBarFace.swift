@@ -57,10 +57,10 @@ enum HoverReaction: String, CaseIterable {
 
 /// Draws and animates the menu bar icon:
 /// - idle: the —ω— logo, unchanged (it's the sleepy face);
-/// - pointer comes near: it wakes up happy (^ ^), then its little shiny
-///   eyes follow the pointer wherever it goes, blinking now and then, and
-///   it blushes when the pointer is right next to it; falls back asleep a
-///   moment after the pointer leaves;
+/// - pointer comes near: it wakes up ("ooh!", O 3 O), then watches wide
+///   awake (O ω O), leaning toward the pointer wherever it goes, blinking
+///   now and then, shy right next to it; falls back asleep a moment after
+///   the pointer leaves. Only the original traced faces, nothing else;
 /// - pointer over it: wakes up with a random reaction, then back to the logo
 ///   once the pointer leaves;
 /// - a reminder waiting for an answer: shows that reminder's mood face
@@ -165,18 +165,25 @@ final class MenuBarFace {
     }
 
     private func drawWatching(dx: CGFloat, dy: CGFloat, now: Date) {
-        let awake = now.timeIntervalSince(wokeAt)
+        let face = Self.watchFace(awake: now.timeIntervalSince(wokeAt), distance: hypot(dx, dy))
         let look = Self.look(dx: dx, dy: dy)
-        let wow = awake < 0.6
-        // A quick blink every ~4 seconds.
-        let blink = !wow && awake.truncatingRemainder(dividingBy: 4.1) > 3.97
-        // Right next to it: it gets shy and blushes.
-        let shy = !wow && hypot(dx, dy) < 45
-        show(key: "watch|\(Int(look.dx * 8))|\(Int(look.dy * 8))|\(blink)|\(wow)|\(shy)",
-             image: Self.watchImage(look: look, blink: blink, wow: wow, shy: shy))
+        show(key: "watch|\(face)|\(Int(look.dx * 8))|\(Int(look.dy * 8))",
+             image: Self.watchingImage(face, look: look))
     }
 
-    /// Where the pupils point: toward the pointer (screen y is up, the image
+    /// The original faces it watches with (all drawn at one size and centre):
+    /// "ooh!" (O 3 O) as it wakes, then wide awake (O ω O), blinking (— ω —)
+    /// every ~4 seconds, and shy (≡ ᴗ ≡) when the pointer is right next to it.
+    nonisolated static let watchFaces: [Face] = [.surprisedKiss, .owo, .sleepy, .sheepish]
+
+    nonisolated static func watchFace(awake: TimeInterval, distance: CGFloat) -> Face {
+        if awake < 0.6 { return .surprisedKiss }
+        if distance < 45 { return .sheepish }
+        if awake.truncatingRemainder(dividingBy: 4.1) > 3.97 { return .sleepy }
+        return .owo
+    }
+
+    /// Which way it leans to look at the pointer (screen y is up, the image
     /// is drawn y-down), full strength once it's more than ~60 pt away.
     nonisolated static func look(dx: CGFloat, dy: CGFloat) -> CGVector {
         let distance = hypot(dx, dy)
@@ -185,74 +192,12 @@ final class MenuBarFace {
         return CGVector(dx: dx / distance * strength, dy: -dy / distance * strength)
     }
 
-    /// The awake face for the menu bar, kaomoji-cute (•ω•): two small round
-    /// eyes with a shine that glance toward the pointer (`look`, each axis
-    /// -1…1), a tiny ω mouth. Just woken (`wow`): happy ^ ^ eyes and an open
-    /// little mouth. Blinking: closed ◡ eyes. Pointer very close (`shy`):
-    /// it blushes and smiles.
-    nonisolated static func watchImage(look: CGVector, blink: Bool, wow: Bool, shy: Bool = false) -> NSImage {
-        template { ctx, _ in
-            ctx.setStrokeColor(NSColor.black.cgColor)
-            ctx.setFillColor(NSColor.black.cgColor)
-            ctx.setLineCap(.round)
-            ctx.setLineJoin(.round)
-            let shift = CGPoint(x: look.dx * 1.7, y: look.dy * 1.2)
-            let eyes = [CGPoint(x: 13 + shift.x, y: 9.5 + shift.y), CGPoint(x: 25 + shift.x, y: 9.5 + shift.y)]
-            for eye in eyes {
-                if wow {
-                    // ^ ^
-                    ctx.setLineWidth(1.6)
-                    ctx.move(to: CGPoint(x: eye.x - 3, y: eye.y + 1.5))
-                    ctx.addQuadCurve(to: CGPoint(x: eye.x + 3, y: eye.y + 1.5), control: CGPoint(x: eye.x, y: eye.y - 3.5))
-                    ctx.strokePath()
-                } else if blink {
-                    // ◡ ◡
-                    ctx.setLineWidth(1.6)
-                    ctx.move(to: CGPoint(x: eye.x - 3, y: eye.y - 0.5))
-                    ctx.addQuadCurve(to: CGPoint(x: eye.x + 3, y: eye.y - 0.5), control: CGPoint(x: eye.x, y: eye.y + 3))
-                    ctx.strokePath()
-                } else {
-                    let r: CGFloat = 3.3
-                    ctx.setBlendMode(.normal)
-                    ctx.fillEllipse(in: CGRect(x: eye.x - r, y: eye.y - r, width: r * 2, height: r * 2))
-                    // The shine, cut out of the eye.
-                    ctx.setBlendMode(.clear)
-                    let shine = CGPoint(x: eye.x + 1.1 - look.dx * 0.5, y: eye.y - 1.2)
-                    ctx.fillEllipse(in: CGRect(x: shine.x - 1.05, y: shine.y - 1.05, width: 2.1, height: 2.1))
-                    ctx.setBlendMode(.normal)
-                }
-                if shy {
-                    // Blush: two little strokes under each eye.
-                    ctx.setLineWidth(0.9)
-                    for dx: CGFloat in [-1.8, 0.6] {
-                        ctx.move(to: CGPoint(x: eye.x + dx - 0.7, y: 16.2))
-                        ctx.addLine(to: CGPoint(x: eye.x + dx + 0.9, y: 14.2))
-                    }
-                    ctx.strokePath()
-                }
-            }
-            let mouth = CGPoint(x: 19 + shift.x * 0.6, y: 14.6 + shift.y * 0.5)
-            ctx.setLineWidth(1.25)
-            if wow {
-                // A little open ▽.
-                ctx.move(to: CGPoint(x: mouth.x - 1.8, y: mouth.y - 0.4))
-                ctx.addLine(to: CGPoint(x: mouth.x + 1.8, y: mouth.y - 0.4))
-                ctx.addLine(to: CGPoint(x: mouth.x, y: mouth.y + 2))
-                ctx.closePath()
-                ctx.fillPath()
-            } else if shy {
-                ctx.move(to: CGPoint(x: mouth.x - 2, y: mouth.y))
-                ctx.addQuadCurve(to: CGPoint(x: mouth.x + 2, y: mouth.y), control: CGPoint(x: mouth.x, y: mouth.y + 2.6))
-                ctx.strokePath()
-            } else {
-                // ω
-                ctx.move(to: CGPoint(x: mouth.x - 2.6, y: mouth.y))
-                ctx.addQuadCurve(to: CGPoint(x: mouth.x, y: mouth.y + 0.3), control: CGPoint(x: mouth.x - 1.3, y: mouth.y + 2.4))
-                ctx.addQuadCurve(to: CGPoint(x: mouth.x + 2.6, y: mouth.y), control: CGPoint(x: mouth.x + 1.3, y: mouth.y + 2.4))
-                ctx.strokePath()
-            }
-        }
+    /// A watching face, nudged toward the pointer (`look`, each axis -1…1).
+    nonisolated static func watchingImage(_ face: Face, look: CGVector) -> NSImage {
+        faceImage(face, span: watchSpan, offset: CGPoint(x: look.dx * 2, y: look.dy * 1.6))
     }
+
+    nonisolated private static let watchSpan = span(of: watchFaces)
 
     private func pointerEntered() {
         pointerInside = true

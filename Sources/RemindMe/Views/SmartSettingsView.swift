@@ -79,7 +79,7 @@ struct SmartSettingsView: View {
         }
         .pickerStyle(.menu)
         .fixedSize()
-        Text("For reminders (no buttons). It says its last words, then \"Sayonara.\", and dissolves.")
+        Text("For reminders (no buttons). It says its last words, then \"Sayonara.\", and dissolves. Ignore it while you type and it leaves angry, with a buzz.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)

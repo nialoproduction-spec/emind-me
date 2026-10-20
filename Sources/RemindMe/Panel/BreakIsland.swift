@@ -20,6 +20,9 @@ enum IslandGeometry {
     /// The face's size next to the notch (the menu bar face's shape).
     static let faceHeight: CGFloat = 13
     static let faceWidth: CGFloat = 25
+    /// Room on a break between the face and the notch for its z's to float
+    /// up into (otherwise the camera notch hides them).
+    static let zRoom: CGFloat = 18
 
     struct Notch: Equatable {
         var middleWidth: CGFloat
@@ -277,8 +280,10 @@ struct IslandFace: View {
             .offset(y: tone == .onBreak ? (bob ? -1.2 : 1.2) : 0)
             .rotationEffect(.degrees(shake))
             .overlay(alignment: .topTrailing) {
-                if tone == .onBreak { FloatingZs().offset(x: 9, y: -5) }
+                if tone == .onBreak { FloatingZs().offset(x: 6, y: -4) }
             }
+            // On a break, the z's get their own room before the notch.
+            .padding(.trailing, tone == .onBreak ? IslandGeometry.zRoom : 0)
             .task(id: tone) { await animate() }
     }
 
@@ -325,7 +330,7 @@ private struct FloatingZs: View {
     private func z(size: CGFloat, delay: Double) -> some View {
         Text("z")
             .font(.system(size: size, weight: .heavy, design: .rounded))
-            .offset(x: rise ? 5 : 0, y: rise ? -9 : 0)
+            .offset(x: rise ? 6 : 0, y: rise ? -8 : 0)
             .opacity(reduceMotion ? 0.8 : (rise ? 0 : 0.95))
             .animation(.easeOut(duration: 2.2).repeatForever(autoreverses: false).delay(delay), value: rise)
     }
@@ -557,6 +562,7 @@ final class BreakIslandController {
         }
         let gap: CGFloat = 7
         var left: CGFloat = content.face == nil ? 0 : IslandGeometry.faceWidth
+        if content.face != nil, content.tone == .onBreak { left += IslandGeometry.zRoom }
         if !content.title.isEmpty {
             left += (left > 0 ? gap : 0) + width(content.title, rounded(IslandGeometry.font, .semibold))
         }

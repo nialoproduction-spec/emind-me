@@ -326,11 +326,22 @@ final class BreakCycleManagerTests: XCTestCase {
         manager.startCycle(BreakCycleConfig(workMinutes: 40, breakMinutes: 10))
         now.addTimeInterval(40 * 60)
         manager.tick()
-        idle = 5 // used the Mac a few seconds ago
+        idle = 2 // used the Mac a couple of seconds ago
         now.addTimeInterval(10 * 60)
         manager.tick()
         XCTAssertEqual(manager.state?.phase, .work)
         XCTAssertEqual(titles.last, "Working")
+    }
+
+    func testFiveQuietSecondsAtTheEndOfABreakCountAsAway() {
+        let manager = makeManager()
+        manager.startCycle(BreakCycleConfig(workMinutes: 40, breakMinutes: 10))
+        now.addTimeInterval(40 * 60)
+        manager.tick()
+        idle = 6 // hands off for the last few seconds
+        now.addTimeInterval(10 * 60)
+        manager.tick()
+        XCTAssertEqual(manager.state?.phase, .waiting, "red and angry, counting up")
     }
 
     func testWaitingSurvivesARestart() {

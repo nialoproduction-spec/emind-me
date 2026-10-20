@@ -218,8 +218,9 @@ final class BreakCycleManager: ObservableObject {
     private let idleSeconds: @MainActor () -> TimeInterval
 
     /// When a break ends, no input for this long means "not at the Mac", so
-    /// work waits instead of starting by itself.
-    static let awayAfter: TimeInterval = 20
+    /// work waits (the red, angry count-up) instead of starting by itself.
+    /// Short on purpose: not touching it in the last 5 seconds counts.
+    static let awayAfter: TimeInterval = 5
     /// While waiting, input this recent means "back": work starts now.
     static let backWithin: TimeInterval = 2
 

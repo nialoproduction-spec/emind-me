@@ -24,18 +24,37 @@ struct NoticeContent: Equatable {
     var id = UUID()
 }
 
-/// Tells a popup it's time to go out dramatically (hovered or clicked).
-@MainActor
-final class PopupLife: ObservableObject {
-    @Published var dying = false
+/// How a popup goes out.
+enum PopupExit: Equatable {
+    /// Sent off (click, double-click or a rest of the pointer): it cries its
+    /// last words, then "Sayonara.".
+    case dismissed
+    /// Its time ran out while you kept typing or moving the pointer: it gets
+    /// angry, buzzes, huffs "Ignored again…", then "Sayonara.".
+    case ignored
 }
 
-/// A reminder's popup: the habit card's look (the panel's theme), a cute
-/// face from the face kit, the title and a short quote, no buttons. Send it
+/// Tells a popup it's time to go out dramatically, and which way.
+@MainActor
+final class PopupLife: ObservableObject {
+    @Published var exit: PopupExit?
+}
+
+/// A reminder's popup: the habit card's look (the panel's theme), the
+/// original traced face, the title and a short quote, no buttons. Send it
 /// off with a click (or a double-click, or by resting the pointer on it, as
-/// chosen in Settings) and it goes dramatically: last words with a shake,
-/// then "Sayonara." with a peaceful face, then it dissolves into nothing.
+/// chosen in Settings) and it goes dramatically: last words in tears with a
+/// shake, then "Sayonara." at peace, then it dissolves into nothing. Ignore
+/// it while you work and it leaves angry instead.
 struct NoticePillView: View {
+    /// Where it is in its life. Previews start it at a later stage.
+    enum Stage: Equatable {
+        case alive
+        /// Its parting line: last words (sent off) or a huff (ignored).
+        case parting(PopupExit, String)
+        case sayonara(PopupExit)
+    }
+
     let content: NoticeContent
     @ObservedObject var life: PopupLife
     var onTap: () -> Void = {}
@@ -44,20 +63,54 @@ struct NoticePillView: View {
 
     @ObservedObject private var themeStore = ThemeStore.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var face = Kaomoji.random([.happy, .happy, .love, .calm, .shy, .silly, .pleading, .shocked, .nervous].randomElement()!)
-    @State private var lastWords: String?
+    @State private var stage: Stage
     @ObservedObject private var popupSettings = AppSettings.reminderPopup
     @State private var shake: Double = 0
     @State private var dissolve: CGFloat = 0
     @State private var bits = DissolveBit.burst(count: 46)
 
+    init(content: NoticeContent, life: PopupLife, stage: Stage = .alive,
+         onTap: @escaping () -> Void = {}, onDied: @escaping () -> Void = {}) {
+        self.content = content
+        _life = ObservedObject(wrappedValue: life)
+        self.onTap = onTap
+        self.onDied = onDied
+        _stage = State(initialValue: stage)
+    }
+
+    /// The original faces' moods: cute while it waits, crying when sent
+    /// off, at peace for "Sayonara.", angry all the way out when ignored.
+    static func mood(for stage: Stage) -> FaceMood {
+        switch stage {
+        case .alive: return .gentle
+        case .parting(.dismissed, _): return .skipped
+        case .sayonara(.dismissed): return .snoozed
+        case .parting(.ignored, _), .sayonara(.ignored): return .urgent
+        }
+    }
+
+    private var line: String? {
+        switch stage {
+        case .alive: return content.detail
+        case .parting(_, let words): return words
+        case .sayonara: return "Sayonara."
+        }
+    }
+
+    private var ignored: Bool {
+        switch stage {
+        case .parting(.ignored, _), .sayonara(.ignored): return true
+        default: return false
+        }
+    }
+
     var body: some View {
         let theme = themeStore.theme
         let shape = RoundedRectangle(cornerRadius: theme.cornerRadius, style: .continuous)
+        let quiet = stage == .alive
         ZStack {
             VStack(spacing: 6) {
-                LivelyKaomojiView(face: face, color: theme.text)
-                    .frame(width: 110, height: 76)
+                AnimatedFaceView(mood: Self.mood(for: stage), color: theme.text)
 
                 Text(content.title)
                     .font(theme.titleFont)
@@ -66,11 +119,11 @@ struct NoticePillView: View {
                     .lineLimit(2)
                     .frame(maxWidth: .infinity)
 
-                if let line = lastWords ?? content.detail {
-                    Text(lastWords == nil ? "“\(line)”" : line)
-                        .font(.system(size: max(theme.fontSize - 2, 10), weight: lastWords == nil ? .regular : .semibold)
+                if let line {
+                    Text(quiet ? "“\(line)”" : line)
+                        .font(.system(size: max(theme.fontSize - 2, 10), weight: quiet ? .regular : .semibold)
                             .italic())
-                        .foregroundStyle(theme.text.opacity(lastWords == nil ? 0.55 : 0.9))
+                        .foregroundStyle(theme.text.opacity(quiet ? 0.55 : 0.9))
                         .multilineTextAlignment(.center)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
@@ -86,6 +139,9 @@ struct NoticePillView: View {
             .background(
                 shape.fill(theme.background.opacity(theme.backgroundOpacity))
                     .overlay(shape.strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+                    // Ignored: an angry red edge.
+                    .overlay(shape.strokeBorder(Color.red.opacity(ignored ? 0.75 : 0), lineWidth: 2))
+                    .animation(.easeOut(duration: 0.2), value: ignored)
             )
             .clipShape(shape)
             .rotationEffect(.degrees(shake))
@@ -100,32 +156,37 @@ struct NoticePillView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture(count: popupSettings.value.dismiss == .doubleClick ? 2 : 1) {
-            if popupSettings.value.dismiss != .hover { life.dying = true }
+            if popupSettings.value.dismiss != .hover, life.exit == nil { life.exit = .dismissed }
         }
-        .onChange(of: life.dying) {
-            if life.dying { Task { await die() } }
+        .onChange(of: life.exit) {
+            if let exit = life.exit { Task { await die(exit) } }
         }
     }
 
-    /// Last words (long enough to read) with a shake, then "Sayonara." with
-    /// a peaceful face, then it dissolves into nothing.
-    @MainActor private func die() async {
-        guard lastWords == nil else { return }
-        face = Kaomoji.random([.shocked, .sad, .dead, .pleading].randomElement()!)
-        withAnimation(.easeOut(duration: 0.2)) { lastWords = ReminderQuotes.lastWords.randomElement() }
+    /// Its parting line (long enough to read): crying last words with a
+    /// shake when sent off, an angry huff when ignored (the controller buzzes
+    /// the window and the trackpad meanwhile). Then "Sayonara.", then it
+    /// dissolves into nothing.
+    @MainActor private func die(_ exit: PopupExit) async {
+        guard stage == .alive else { return }
+        let lines = exit == .ignored ? ReminderQuotes.ignoredWords : ReminderQuotes.lastWords
+        withAnimation(.easeOut(duration: 0.2)) { stage = .parting(exit, lines.randomElement() ?? "Fine.") }
         guard !reduceMotion else {
-            try? await Task.sleep(for: .milliseconds(2200))
+            try? await Task.sleep(for: .milliseconds(2400))
             onDied()
             return
         }
-        for angle in [-6.0, 5.5, -4.5, 4, -3, 2, -1, 0] {
-            withAnimation(.easeInOut(duration: 0.06)) { shake = angle }
-            try? await Task.sleep(for: .milliseconds(60))
+        if exit == .dismissed {
+            for angle in [-6.0, 5.5, -4.5, 4, -3, 2, -1, 0] {
+                withAnimation(.easeInOut(duration: 0.06)) { shake = angle }
+                try? await Task.sleep(for: .milliseconds(60))
+            }
+            try? await Task.sleep(for: .milliseconds(2000)) // time to read it
+        } else {
+            try? await Task.sleep(for: .milliseconds(2600)) // buzzing, then a glare
         }
-        try? await Task.sleep(for: .milliseconds(2000)) // time to read it
 
-        face = Kaomoji(eyes: .content, mouth: .smile, extra: [.tears, .none, .sparkles].randomElement()!)
-        withAnimation(.easeInOut(duration: 0.35)) { lastWords = "Sayonara." }
+        withAnimation(.easeInOut(duration: 0.35)) { stage = .sayonara(exit) }
         try? await Task.sleep(for: .milliseconds(1500))
 
         withAnimation(.easeIn(duration: 1.1)) { dissolve = 1 }
@@ -231,9 +292,58 @@ final class NoticePillController {
             let seconds = content.duration
             hideTask = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(seconds))
-                guard !Task.isCancelled else { return }
-                self?.hide(ifGeneration: shownGeneration)
+                guard !Task.isCancelled, let self else { return }
+                self.timeUp(life: life, generation: shownGeneration)
             }
+        }
+    }
+
+    /// Any keyboard, mouse or trackpad use this recently counts as busy.
+    nonisolated static let busyWithin: TimeInterval = 3
+
+    /// Its time ran out: ignored if you were typing or moving the pointer
+    /// just now (and the pointer isn't resting on it, reading it). Away or
+    /// idle, it just fades.
+    nonisolated static func wasIgnored(idleSeconds: TimeInterval, pointerOnIt: Bool) -> Bool {
+        !pointerOnIt && idleSeconds < busyWithin
+    }
+
+    private func timeUp(life: PopupLife, generation shown: Int) {
+        guard shown == generation, let panel, panel.isVisible, life.exit == nil else { return }
+        let ignored = Self.wasIgnored(idleSeconds: AwayDetector.idleSeconds(),
+                                      pointerOnIt: panel.frame.contains(NSEvent.mouseLocation))
+        guard ignored else {
+            hide(ifGeneration: shown)
+            return
+        }
+        // It leaves angry; the view calls onDied when it has dissolved.
+        life.exit = .ignored
+        Task { [weak self] in await self?.buzz(generation: shown) }
+    }
+
+    /// The window's side-to-side jolts, in points, for one burst.
+    static let buzzOffsets: [CGFloat] = [-9, 9, -8, 8, -7, 7, -6, 6, -4, 4, -3, 3, -1.5, 1.5, 0]
+
+    /// The "vibration" when it's ignored: two bursts of the whole window
+    /// buzzing side to side, with trackpad taps along (macOS only plays
+    /// those while a finger is on the trackpad). Reduce Motion: taps only.
+    private func buzz(generation shown: Int) async {
+        guard let panel else { return }
+        let home = panel.frame.origin
+        let still = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        try? await Task.sleep(for: .milliseconds(250)) // the face turns angry first
+        for _ in 0..<2 {
+            for (step, dx) in Self.buzzOffsets.enumerated() {
+                guard generation == shown, panel.isVisible else { return }
+                if !still { panel.setFrameOrigin(NSPoint(x: home.x + dx, y: home.y)) }
+                if step % 3 == 0 {
+                    NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+                }
+                try? await Task.sleep(for: .milliseconds(28))
+            }
+            guard generation == shown else { return }
+            panel.setFrameOrigin(home)
+            try? await Task.sleep(for: .milliseconds(260))
         }
     }
 
@@ -257,7 +367,7 @@ final class NoticePillController {
             try? await Task.sleep(for: .milliseconds(400))
             while !Task.isCancelled {
                 guard let self, self.generation == shown, let panel = self.panel, panel.isVisible else { return }
-                if life.dying {
+                if life.exit != nil {
                     self.hideTask?.cancel()
                     return
                 }
@@ -267,7 +377,7 @@ final class NoticePillController {
                     if inside, wasOutside {
                         let since = restingSince ?? Date()
                         restingSince = since
-                        if Date().timeIntervalSince(since) >= Self.hoverDwell { life.dying = true }
+                        if Date().timeIntervalSince(since) >= Self.hoverDwell { life.exit = .dismissed }
                     }
                 }
                 try? await Task.sleep(for: .milliseconds(80))

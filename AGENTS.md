@@ -52,15 +52,20 @@ Sources/RemindMe/
     PersistenceController.swift  ModelContainer
   Panel/
     ReminderPanel.swift          borderless non-activating NSPanel
-    NoticePill.swift             reminders' popup: the habit card's look (theme, a face-kit face, title)
-                                 with no buttons, a short quote (ReminderQuotes) instead;  sent off by a click
-                                 (default), double-click or a 0.9 s rest of the pointer (`ReminderPopupSettings
-                                 .dismiss`); no × button: last words (≈2.5 s to read) + shake, "Sayonara.", dissolve
+    NoticePill.swift             reminders' popup: the habit card's look (theme, the original animated face,
+                                 title) with no buttons, a short quote (ReminderQuotes) instead; sent off by a
+                                 click (default), double-click or a 0.9 s rest of the pointer (`ReminderPopupSettings
+                                 .dismiss`): crying last words + shake, "Sayonara.", dissolve. Time runs out while
+                                 you're typing/moving the pointer (`wasIgnored`, input < 3 s ago, pointer not on
+                                 it): angry face, red edge, `ignoredWords`, the window buzzes + trackpad haptic
+                                 taps (only felt with a finger on the trackpad), "Sayonara.", dissolve
     BreakIsland.swift            the break timer's home, at the camera notch: solid colours (the pick
                                  shows exactly; glass was tried and dropped). Compact: each side only
                                  as wide as its own content (asymmetric around the notch); between
                                  moments just face + time, words only with the moments. Living faces
                                  (blink / sleepy bob + drifting z's / angry shake), breathing break;
+                                 on a break the left side is wider by `zRoom` so the z's float in
+                                 view instead of under the camera;
                                  "Working" / "Break" + countdown, or
                                  "Come back!" with a red pulsing left side and red +time away; work
                                  countdown kept or hidden (`BreakTimerSettings.keepWorkCountdown`);
@@ -75,13 +80,12 @@ Sources/RemindMe/
     LiveReminderView.swift       the pop-up card: face, Done / Snooze (lengths) / Skip
     EditItemView, ItemHistoryView, WeeklySummaryView, SmartSettingsView, ThemeSettingsView,
     ManageRemindersView, ReminderRowView, ChecklistRowView, CollapsedPillView, EndOfDaySummaryView
-  Faces/                         24 traced kaomoji faces, animation, menu bar face; Kaomoji.swift = the
-                                 cute face kit (22 eyes × 23 mouths × 15 extras = 7,590, 11 moods;
-                                 kaomoji rules: eyes close, tiny mouths, blush/sparkles; no glasses,
-                                 screams, fangs or spirals — the user found those creepy).
-                                 MenuBarFace wakes (^ ^) near the pointer, shiny dot eyes follow it,
-                                 blushes up close
-                                 (`look`/`watchImage`, polled 10×/s, 30×/s while awake)
+  Faces/                         the 24 traced faces (the user's originals, "OG"), animation, menu bar
+                                 face. Use only these. A generated face kit and hand-drawn cute faces
+                                 were tried on 20 Oct 2026 and removed at the user's request.
+                                 MenuBarFace wakes near the pointer (O 3 O), watches (O ω O) leaning
+                                 toward it, blinks (— ω —), shy up close (≡ ᴗ ≡)
+                                 (`look`/`watchFace`/`watchingImage`, polled 10×/s, 30×/s while awake)
 Tests/RemindMeTests/             XCTest; UIPreviewTests renders PNGs when PREVIEW_DIR is set (CI attaches
                                  them to the release: look at them after any visual change)
 Design/, scripts/trace_faces.py  source art + the tracer that generated Faces/FaceArt.swift
@@ -148,7 +152,7 @@ Design/, scripts/trace_faces.py  source art + the tracer that generated Faces/Fa
 - Enter saves at once.
 - The break timer is listed in its own "Break timer" section (`BreakTimerSection`): `stop()` greys it
   out but keeps `config`, `resume()` restarts it, `remove()` forgets it. Lengths are in seconds.
-- A break that ends with no input for 20 s goes to phase `.waiting` ("Break's over" stays at the
-  notch); the next work stretch starts counting at the first key press / mouse move (idle ≤ 2 s).
+- A break that ends with no input for 5 s (`awayAfter`, kept short on purpose: the user wants it
+  sensitive) goes to phase `.waiting` (red, angry "Come back!" count-up at the notch); the next work stretch starts counting at the first key press / mouse move (idle ≤ 2 s).
   The idle time is injected (`idleSeconds:`) so tests never read the real one.
 - A menu bar click opens the list directly (`openMainPage`), not the small pill.

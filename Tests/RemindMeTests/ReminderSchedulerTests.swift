@@ -127,7 +127,7 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertFalse(ReminderQuotes.goal.isEmpty)
         XCTAssertFalse(ReminderQuotes.lastWords.isEmpty)
         let allLines = ReminderQuotes.topics.flatMap(\.quotes) + ReminderQuotes.general + ReminderQuotes.habit
-            + ReminderQuotes.goal + ReminderQuotes.lastWords
+            + ReminderQuotes.goal + ReminderQuotes.lastWords + ReminderQuotes.ignoredWords
         XCTAssertFalse(allLines.contains { $0.contains("—") || $0.contains("–") }, "plain punctuation only")
         XCTAssertTrue(allLines.allSatisfy { $0.count <= 48 }, "short enough for one line")
     }
@@ -149,20 +149,28 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertEqual(settings.dismiss, .click, "one click by default")
     }
 
-    func testFaceKitHasOverAThousandFaces() {
-        XCTAssertGreaterThanOrEqual(Kaomoji.count, 7000)
-        XCTAssertGreaterThan(Kaomoji.variety(.silly), 100)
-        XCTAssertTrue(Kaomoji.Mood.allCases.allSatisfy { Kaomoji.variety($0) > 10 })
-        for index in stride(from: 0, to: Kaomoji.count, by: 37) {
-            XCTAssertFalse(Kaomoji.at(index).strokes.isEmpty)
-        }
-        var seen = Set<Kaomoji>()
-        for _ in 0..<300 { seen.insert(Kaomoji.random(.happy)) }
-        XCTAssertGreaterThan(seen.count, 40, "random happy faces actually vary")
-        XCTAssertGreaterThan(Kaomoji.variety(.angry), 20)
-        let dead = Kaomoji.random(.dead)
-        XCTAssertTrue([.cross, .crying].contains(dead.eyes), "fainted: x_x or T_T")
+    func testIgnoredPopupLeavesAngry() {
+        XCTAssertTrue(NoticePillController.wasIgnored(idleSeconds: 0.4, pointerOnIt: false),
+                      "still typing when its time ran out: ignored")
+        XCTAssertFalse(NoticePillController.wasIgnored(idleSeconds: 0.4, pointerOnIt: true),
+                       "pointer resting on it: reading it, not ignoring it")
+        XCTAssertFalse(NoticePillController.wasIgnored(idleSeconds: 60, pointerOnIt: false),
+                       "away from the Mac: it just fades")
+        XCTAssertEqual(NoticePillView.mood(for: .alive), .gentle)
+        XCTAssertEqual(NoticePillView.mood(for: .parting(.ignored, "Ignored again…")), .urgent, "angry")
+        XCTAssertEqual(NoticePillView.mood(for: .sayonara(.ignored)), .urgent, "angry all the way out")
+        XCTAssertEqual(NoticePillView.mood(for: .parting(.dismissed, "Nooooo!")), .skipped, "cries")
+        XCTAssertTrue(ReminderQuotes.ignoredWords.contains("Ignored again…"))
+        XCTAssertFalse(ReminderQuotes.lastWords.contains("Ignored again…"), "sent off isn't ignored")
         XCTAssertFalse(ReminderQuotes.quote(for: "Drink water", pick: -7).isEmpty, "any pick works")
+    }
+
+    func testMenuBarWatchingUsesTheOriginalFaces() {
+        XCTAssertEqual(MenuBarFace.watchFace(awake: 0.2, distance: 150), .surprisedKiss, "ooh! as it wakes")
+        XCTAssertEqual(MenuBarFace.watchFace(awake: 2, distance: 150), .owo, "wide awake, watching")
+        XCTAssertEqual(MenuBarFace.watchFace(awake: 4.0, distance: 150), .sleepy, "a blink")
+        XCTAssertEqual(MenuBarFace.watchFace(awake: 2, distance: 20), .sheepish, "shy up close")
+        XCTAssertTrue(Set(MenuBarFace.watchFaces).isSubset(of: Set(Face.allCases)))
     }
 
     func testJustRemindIsHeldWhileFocusIsOn() throws {

@@ -416,29 +416,23 @@ final class UIPreviewTests: XCTestCase {
         try save(view, as: "preview-12-smart-settings-full.png")
     }
 
-    /// The menu bar face awake, looking at the pointer in different places.
+    /// The menu bar face awake (the original faces), looking at the pointer
+    /// in different places.
     func testRenderWatchingFace() throws {
         try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
-        let looks: [(String, CGVector, Bool, Bool)] = [
-            ("wow", CGVector(dx: 0, dy: 1), false, true),
-            ("down", CGVector(dx: 0, dy: 1), false, false),
-            ("left", CGVector(dx: -1, dy: 0.3), false, false),
-            ("right", CGVector(dx: 1, dy: 0.3), false, false),
-            ("down-left", CGVector(dx: -0.7, dy: 0.7), false, false),
-            ("blink", .zero, true, false),
+        let looks: [(String, Face, CGVector)] = [
+            ("waking", .surprisedKiss, CGVector(dx: 0, dy: 1)),
+            ("down", .owo, CGVector(dx: 0, dy: 1)),
+            ("left", .owo, CGVector(dx: -1, dy: 0.3)),
+            ("right", .owo, CGVector(dx: 1, dy: 0.3)),
+            ("down-left", .owo, CGVector(dx: -0.7, dy: 0.7)),
+            ("blink", .sleepy, .zero),
+            ("shy (close)", .sheepish, CGVector(dx: 0.3, dy: 0.5)),
         ]
-        let shy = VStack(spacing: 4) {
-            Image(nsImage: MenuBarFace.watchImage(look: CGVector(dx: 0.3, dy: 0.5), blink: false, wow: false, shy: true))
-                .renderingMode(.template)
-                .resizable()
-                .frame(width: 38 * 3, height: 20 * 3)
-                .foregroundStyle(.white)
-            Text("shy (close)").font(.caption).foregroundStyle(.white.opacity(0.6))
-        }
         let row = HStack(spacing: 14) {
-            ForEach(looks, id: \.0) { name, look, blink, wow in
+            ForEach(looks, id: \.0) { name, face, look in
                 VStack(spacing: 4) {
-                    Image(nsImage: MenuBarFace.watchImage(look: look, blink: blink, wow: wow))
+                    Image(nsImage: MenuBarFace.watchingImage(face, look: look))
                         .renderingMode(.template)
                         .resizable()
                         .frame(width: 38 * 3, height: 20 * 3)
@@ -446,7 +440,6 @@ final class UIPreviewTests: XCTestCase {
                     Text(name).font(.caption).foregroundStyle(.white.opacity(0.6))
                 }
             }
-            shy
         }
         .padding(16)
         .background(Color.black)
@@ -488,84 +481,30 @@ final class UIPreviewTests: XCTestCase {
     func testRenderReminderPopup() throws {
         try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
         let size = NoticePillController.size
-        let popup = HStack(spacing: 10) {
-            NoticePillView(content: NoticeContent(title: "Drink water", detail: "Stay hydrated, stay sharp."),
-                           life: PopupLife())
-                .frame(width: size.width, height: size.height)
-            // Mid-dissolve: the dead face, its last words, the bits flying off.
-            ZStack {
-                RoundedRectangle(cornerRadius: theme.cornerRadius, style: .continuous)
-                    .fill(theme.background.opacity(theme.backgroundOpacity))
-                    .opacity(0.35)
-                VStack(spacing: 6) {
-                    KaomojiView(face: Kaomoji(eyes: .cross, mouth: .wavy, extra: .tears), color: theme.text)
-                        .frame(width: 110, height: 76)
-                    Text("Tell my family I loved them.")
-                        .font(.system(size: theme.fontSize - 2, weight: .semibold).italic())
-                        .foregroundStyle(theme.text.opacity(0.9))
+        let content = NoticeContent(title: "Drink water", detail: "Stay hydrated, stay sharp.")
+        let stages: [NoticePillView.Stage] = [
+            .alive,
+            .parting(.dismissed, "Tell my family I loved them."),
+            .sayonara(.dismissed),
+            .parting(.ignored, "Ignored again…"),
+            .sayonara(.ignored),
+        ]
+        let popup = VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                ForEach(0..<3, id: \.self) { index in
+                    NoticePillView(content: content, life: PopupLife(), stage: stages[index])
+                        .frame(width: size.width, height: size.height)
                 }
-                .opacity(0.5)
-                .blur(radius: 3)
-                DissolveField(bits: DissolveBit.burst(count: 46), progress: 0.45,
-                              colors: [theme.text, theme.text.opacity(0.6), theme.accent, theme.background])
             }
-            .frame(width: size.width, height: size.height)
-            // The end: "Sayonara.", accepting its fate.
-            ZStack {
-                RoundedRectangle(cornerRadius: theme.cornerRadius, style: .continuous)
-                    .fill(theme.background.opacity(theme.backgroundOpacity))
-                VStack(spacing: 6) {
-                    KaomojiView(face: Kaomoji(eyes: .content, mouth: .smile, extra: .tears), color: theme.text)
-                        .frame(width: 110, height: 76)
-                    Text("Drink water").font(theme.titleFont).foregroundStyle(theme.text)
-                    Text("Sayonara.")
-                        .font(.system(size: theme.fontSize - 2, weight: .semibold).italic())
-                        .foregroundStyle(theme.text.opacity(0.9))
+            HStack(spacing: 10) {
+                ForEach(3..<5, id: \.self) { index in
+                    NoticePillView(content: content, life: PopupLife(), stage: stages[index])
+                        .frame(width: size.width, height: size.height)
                 }
-                .padding(.top, 10)
-                .frame(maxHeight: .infinity, alignment: .top)
             }
-            .frame(width: size.width, height: size.height)
         }
         .padding(10)
         .background(Color(white: 0.5))
         try save(popup, as: "preview-reminder-popup.png")
-    }
-
-    /// The face kit: every eye, every mouth, every extra, then a row of
-    /// random faces for each mood.
-    func testRenderFaceKit() throws {
-        try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
-        func cell(_ face: Kaomoji) -> some View {
-            KaomojiView(face: face, color: .white).frame(width: 84, height: 44)
-        }
-        var rng = SystemRandomNumberGenerator()
-        let moods: [(String, Kaomoji.Mood)] = [("happy", .happy), ("calm", .calm), ("love", .love),
-                                                ("shocked", .shocked), ("sad", .sad), ("angry", .angry),
-                                                ("dead", .dead), ("shy", .shy), ("silly", .silly),
-                                                ("pleading", .pleading), ("nervous", .nervous)]
-        let sheet = VStack(alignment: .leading, spacing: 10) {
-            Text("Eyes").foregroundStyle(.white)
-            LazyVGrid(columns: Array(repeating: GridItem(.fixed(88)), count: 9), spacing: 6) {
-                ForEach(Kaomoji.Eyes.allCases, id: \.self) { cell(Kaomoji(eyes: $0, mouth: .cat, extra: .none)) }
-            }
-            Text("Mouths").foregroundStyle(.white)
-            LazyVGrid(columns: Array(repeating: GridItem(.fixed(88)), count: 9), spacing: 6) {
-                ForEach(Kaomoji.Mouth.allCases, id: \.self) { cell(Kaomoji(eyes: .dot, mouth: $0, extra: .none)) }
-            }
-            Text("Extras").foregroundStyle(.white)
-            LazyVGrid(columns: Array(repeating: GridItem(.fixed(88)), count: 9), spacing: 6) {
-                ForEach(Kaomoji.Extra.allCases, id: \.self) { cell(Kaomoji(eyes: .bead, mouth: .smile, extra: $0)) }
-            }
-            ForEach(moods, id: \.0) { name, mood in
-                Text(name).foregroundStyle(.white)
-                HStack(spacing: 4) {
-                    ForEach(0..<9, id: \.self) { _ in cell(Kaomoji.random(mood, using: &rng)) }
-                }
-            }
-        }
-        .padding(16)
-        .background(Color(white: 0.14))
-        try save(sheet, as: "preview-13-face-kit.png")
     }
 }
