@@ -106,19 +106,16 @@ struct SmartSettingsView: View {
         colorRow("Working", $breakTimer.value.workColor)
         colorRow("Break", $breakTimer.value.breakColor)
         colorRow("Time away", $breakTimer.value.awayColor)
-        HStack {
-            Text("Time away counts up after a break if you're not back yet.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer()
-            Button("Reset") {
-                breakTimer.value.workColor = .black
-                breakTimer.value.breakColor = .breakBlue
-                breakTimer.value.awayColor = .awayRed
-            }
-            .controlSize(.small)
+        Text("Time away counts up after a break if you're not back yet.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        Button("Reset colours") {
+            breakTimer.value.workColor = .black
+            breakTimer.value.breakColor = .breakBlue
+            breakTimer.value.awayColor = .awayRed
         }
+        .controlSize(.small)
     }
 
     /// Quick colour picks, plus the system picker for anything else. The
