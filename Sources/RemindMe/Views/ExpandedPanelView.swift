@@ -221,10 +221,6 @@ struct ExpandedPanelView: View {
             }
 
             Divider().opacity(0.15)
-            if let preview = draft.preview {
-                confirmationBar(preview)
-                Divider().opacity(0.15)
-            }
             inputRow
         }
     }
@@ -520,64 +516,6 @@ struct ExpandedPanelView: View {
         .frame(maxWidth: .infinity)
     }
 
-    // MARK: - Confirmation
-
-    /// The live preview: what Enter will save. The type is picked for you
-    /// (a time → Reminder, no time → Goal); the Habit button beside the
-    /// arrow saves it as a habit instead.
-    private func confirmationBar(_ parsed: ParsedItem) -> some View {
-        confirmationRow(parsed)
-    }
-
-    private func confirmationRow(_ parsed: ParsedItem) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: confirmationIcon(for: parsed))
-                .foregroundStyle(theme.accent)
-
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    Text("\(parsed.kindLabel) · \(parsed.title)")
-                        .font(theme.font.weight(.semibold))
-                        .foregroundStyle(theme.text)
-                        .lineLimit(1)
-                    if let category = parsed.category {
-                        CategoryTag(name: category, theme: theme)
-                    }
-                }
-                if !parsed.detailLine.isEmpty {
-                    Text(parsed.detailLine)
-                        .font(.system(size: theme.fontSize - 2))
-                        .foregroundStyle(theme.text.opacity(0.6))
-                        .lineLimit(1)
-                }
-            }
-
-            Spacer()
-
-            Button(action: cancelConfirmation) {
-                Image(systemName: "xmark.circle")
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(theme.text.opacity(0.5))
-            .help("Clear")
-
-            Button(action: saveConfirmed) {
-                Image(systemName: "checkmark.circle.fill")
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(theme.accent)
-            .help("Save (Enter)")
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(theme.accent.opacity(0.08))
-    }
-
-    private func confirmationIcon(for parsed: ParsedItem) -> String {
-        if parsed.breakCycle != nil { return "cup.and.saucer" }
-        return parsed.type.icon
-    }
-
     // MARK: - Input row
 
     private var inputRow: some View {
@@ -589,42 +527,19 @@ struct ExpandedPanelView: View {
                 .focused($fieldFocused)
                 .onSubmit(handleSubmit)
 
-            habitButton
+            TypePicker(preview: draft.preview, theme: theme) { draft.chosen = $0 }
 
             Button(action: handleSubmit) {
                 Image(systemName: "arrow.up.circle.fill")
-                    .foregroundStyle(theme.accent)
+                    .font(.system(size: 18))
+                    .foregroundStyle(draft.preview == nil ? theme.text.opacity(0.25) : ReminderRowView.onColor)
             }
             .buttonStyle(.plain)
             .disabled(draft.text.trimmingCharacters(in: .whitespaces).isEmpty)
+            .help("Save (Enter)")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-    }
-
-    /// Saves what's typed as a habit (tap Done every time) instead of a
-    /// plain reminder. Needs a time or interval in the text. ⌘↩ does the same.
-    private var habitButton: some View {
-        let preview = draft.preview
-        let usable = preview.map { $0.hasSchedule && $0.breakCycle == nil } ?? false
-        return Button(action: saveAsHabit) {
-            Label("Habit", systemImage: "checkmark.circle")
-                .font(.system(size: theme.fontSize - 2, weight: .semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .foregroundStyle(usable ? ReminderRowView.onColor : theme.text.opacity(0.25))
-                .background((usable ? ReminderRowView.onColor : theme.text).opacity(usable ? 0.16 : 0.05))
-                .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .disabled(!usable)
-        .keyboardShortcut(.return, modifiers: .command)
-        .help(usable ? "Save as a habit — you tap Done each time (⌘↩)" : "Add a time first, like “every 2 hours”")
-    }
-
-    private func saveAsHabit() {
-        draft.chosen = .habit
-        saveConfirmed()
     }
 
     // MARK: - Actions
@@ -667,12 +582,6 @@ struct ExpandedPanelView: View {
         let store = AppSettings.categories
         guard !store.value.names.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) else { return }
         store.value.names.append(name)
-    }
-
-    private func cancelConfirmation() {
-        draft.text = ""
-        draft.chosen = nil
-        fieldFocused = true
     }
 
     private func toggle(_ item: Item) {
@@ -855,5 +764,65 @@ struct BreakTimerSection: View {
 
     private func toggle() {
         if breaks.isRunning { breaks.stop() } else { breaks.resume() }
+    }
+}
+
+/// Reminder · Habit · Goal as three small icons beside the send arrow. As
+/// you type, the one your text points to lights up blue (a time → Reminder,
+/// no time → Goal); click another to switch, and the rest go grey. Reminder
+/// and Habit need a time in the text. A break timer shows a cup instead.
+struct TypePicker: View {
+    let preview: ParsedItem?
+    let theme: PanelTheme
+    var onPick: (ItemType) -> Void = { _ in }
+
+    var body: some View {
+        HStack(spacing: 1) {
+            if let preview, preview.breakCycle != nil {
+                chip(icon: "cup.and.saucer.fill", lit: true, enabled: true, help: "Break timer") {}
+            } else {
+                ForEach(ItemType.allCases, id: \.self) { type in
+                    let enabled = preview.map { type == .goal || $0.hasSchedule } ?? false
+                    let lit = preview?.type == type
+                    chip(icon: lit ? Self.filledIcon(type) : type.icon, lit: lit, enabled: enabled,
+                         help: Self.help(type, enabled: enabled)) { onPick(type) }
+                        .keyboardShortcut(type == .habit ? KeyboardShortcut(.return, modifiers: .command) : nil)
+                }
+            }
+        }
+        .padding(2)
+        .background(Capsule().fill(theme.text.opacity(0.07)))
+        .animation(.snappy(duration: 0.18), value: preview?.type)
+    }
+
+    private func chip(icon: String, lit: Bool, enabled: Bool, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 26, height: 22)
+                .foregroundStyle(lit ? ReminderRowView.onColor : theme.text.opacity(enabled ? 0.45 : 0.18))
+                .background(Capsule().fill(lit ? ReminderRowView.onColor.opacity(0.2) : Color.clear))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .help(help)
+    }
+
+    static func filledIcon(_ type: ItemType) -> String {
+        switch type {
+        case .reminder: return "bell.fill"
+        case .habit: return "checkmark.circle.fill"
+        case .goal: return "flag.fill"
+        }
+    }
+
+    static func help(_ type: ItemType, enabled: Bool) -> String {
+        if !enabled { return "\(type.label): add a time first, like “every 2 hours”" }
+        switch type {
+        case .reminder: return "Reminder: just reminds you"
+        case .habit: return "Habit: you tap Done each time (⌘↩)"
+        case .goal: return "Goal: asked about at the evening check-in"
+        }
     }
 }

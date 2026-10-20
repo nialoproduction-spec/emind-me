@@ -31,6 +31,7 @@ jobs:
           xcodebuild -version
           swift --version
           uname -m
+          echo "::notice title=Toolchain::$(xcodebuild -version | head -1) / $(swift --version 2>&1 | head -1)"
 
       - name: Run tests
         run: |
@@ -58,9 +59,15 @@ jobs:
       - name: Render UI previews
         continue-on-error: true
         run: |
-          set -o pipefail
-          PREVIEW_DIR="$PWD/previews" swift test --filter UIPreviewTests 2>&1 | tail -20
-          ls -la previews || true
+          PREVIEW_DIR="$PWD/previews" swift test --filter UIPreviewTests > preview.log 2>&1 || true
+          count=$(ls previews/*.png 2>/dev/null | wc -l | tr -d ' ')
+          echo "::notice title=Previews::${count} images. $(grep -E 'Executed [0-9]+ tests?' preview.log | tail -1)"
+          grep -E "error|failed|Fatal|crash|signal" preview.log | awk '!seen[$0]++' | head -15 > preview-problems.txt || true
+          if [ -s preview-problems.txt ]; then
+            body=$(sed 's/%/%25/g' preview-problems.txt | awk '{printf "%s%%0A", $0}')
+            echo "::warning title=Preview problems::${body}"
+          fi
+          tail -5 preview.log
 
       - name: Build and package
         run: |

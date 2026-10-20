@@ -55,8 +55,10 @@ Sources/RemindMe/
     NoticePill.swift             reminders' popup: the habit card's look (theme, animated face, title)
                                  with no buttons, a short quote (ReminderQuotes) instead; where the
                                  panel's pill goes; stays `ReminderPopupSettings.seconds` (0 = until clicked)
-    BreakIsland.swift            the break timer's home, at the camera notch: one look per state (face +
-                                 "Working" / "Break" + countdown, or "Break over · Waiting"); work
+    BreakIsland.swift            the break timer's home, at the camera notch: liquid glass (Apple's on
+                                 macOS 26 + Xcode 26, blur + tint + lit rim otherwise), living faces
+                                 (blink / bob / angry shake); "Working" / "Break" + countdown, or
+                                 "Come back!" with a red pulsing left side and red +time away; work
                                  countdown kept or hidden (`BreakTimerSettings.keepWorkCountdown`);
                                  colours per state (`IslandPalette`: work black, break #C5D2E5, time
                                  away counted up in red), set in Settings → Smart;
@@ -70,7 +72,8 @@ Sources/RemindMe/
     EditItemView, ItemHistoryView, WeeklySummaryView, SmartSettingsView, ThemeSettingsView,
     ManageRemindersView, ReminderRowView, ChecklistRowView, CollapsedPillView, EndOfDaySummaryView
   Faces/                         24 traced kaomoji faces, animation, menu bar face
-Tests/RemindMeTests/             XCTest; UIPreviewTests renders PNGs when PREVIEW_DIR is set
+Tests/RemindMeTests/             XCTest; UIPreviewTests renders PNGs when PREVIEW_DIR is set (CI attaches
+                                 them to the release: look at them after any visual change)
 Design/, scripts/trace_faces.py  source art + the tracer that generated Faces/FaceArt.swift
 ```
 
@@ -125,13 +128,14 @@ Design/, scripts/trace_faces.py  source art + the tracer that generated Faces/Fa
   (`GoalNudgeSettings`, 8 PM default, editable in Settings → Smart) via `GoalCheckInView` in the panel.
   Answers are stored as done / skipped `Occurrence`s (`Services/GoalCheckIn.swift`), never pending,
   and are kept out of the Today checklist. `isAchieved` = finished for good (stops the asking).
-- The type is never picked by hand: a time in the text → Reminder, none → Goal. The Habit button
-  beside the send arrow (⌘↩) saves it as a habit. "remind me to" and typos of "every" / units are
+- Type is picked for you as you type (a time → Reminder, none → Goal) and shown by `TypePicker`,
+  three icons beside the send arrow: the chosen one lit blue, the rest grey; click to switch
+  (Habit also ⌘↩). No preview bar pops up while typing. "remind me to" and typos of "every" / units are
   cleaned up by the parser first.
 - Rows show "N total" and "N days in a row". A habit card has three buttons only: Done, Snooze
   (shortest length; right-click for the others), Skip.
 - All sounds are off. Don't add any.
-- Typing shows a live preview (with the type chooser) above the field; Enter saves at once.
+- Enter saves at once.
 - The break timer is listed in its own "Break timer" section (`BreakTimerSection`): `stop()` greys it
   out but keeps `config`, `resume()` restarts it, `remove()` forgets it. Lengths are in seconds.
 - A break that ends with no input for 20 s goes to phase `.waiting` ("Break's over" stays at the

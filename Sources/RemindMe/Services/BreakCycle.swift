@@ -374,13 +374,14 @@ final class BreakCycleManager: ObservableObject {
         NoticeContent(title: "Break", countdownTo: state.phaseEnd, face: .happy, tone: .onBreak, duration: 8)
     }
 
-    /// Break's over and nobody's at the Mac: stays out, counting the time
-    /// away in red ("+3:12"), until they're back.
+    /// Break's over and nobody's at the Mac: an angry face and "Come back!"
+    /// on a red left side, the time away counting up in red ("+3:12"),
+    /// until they're back.
     static func waitingNotice(for state: BreakCycleState) -> NoticeContent {
         NoticeContent(
-            title: "Break over",
+            title: "Come back!",
             countUpFrom: state.phaseEnd,
-            face: .sleepy,
+            face: .furious,
             tone: .away,
             sticky: true
         )

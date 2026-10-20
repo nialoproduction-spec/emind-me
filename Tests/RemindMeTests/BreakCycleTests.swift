@@ -298,7 +298,8 @@ final class BreakCycleManagerTests: XCTestCase {
         manager.tick()
         XCTAssertEqual(manager.state?.phase, .waiting, "work doesn't start by itself")
         let waiting = try XCTUnwrap(popups.last ?? nil)
-        XCTAssertEqual(waiting.title, "Break over")
+        XCTAssertEqual(waiting.title, "Come back!")
+        XCTAssertEqual(waiting.face, .furious, "an angry face while you're away")
         XCTAssertEqual(waiting.countUpFrom, now, "counts up the time away from the end of the break")
         XCTAssertEqual(waiting.tone, .away)
         XCTAssertTrue(waiting.sticky, "stays until you're back")
@@ -409,6 +410,8 @@ final class BreakCycleManagerTests: XCTestCase {
         let away = BreakIslandRules.palette(for: .away, settings: defaults)
         XCTAssertEqual(away.time, .awayRed, "time away in red")
         XCTAssertEqual(away.background, .black)
+        XCTAssertEqual(away.leftWing, .awayRed, "the left side turns red")
+        XCTAssertEqual(away.leftText, .white)
 
         var custom = defaults
         custom.breakColor = RGBColor(r: 0.11, g: 0.19, b: 0.38)

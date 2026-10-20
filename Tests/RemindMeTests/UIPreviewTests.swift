@@ -349,4 +349,84 @@ final class UIPreviewTests: XCTestCase {
         }
         try save(sheet, as: "preview-11-edit-and-smart-settings.png")
     }
+
+    // MARK: - Notch island, type picker, reminder popup
+
+    /// One island state on a dark "menu bar" with a stand-in for the camera
+    /// notch, the way it looks on a MacBook.
+    private func island(_ content: NoticeContent, settings: BreakTimerSettings = BreakTimerSettings()) -> some View {
+        let model = IslandModel()
+        model.notch = IslandGeometry.notch(CGSize(width: 190, height: 37))
+        model.content = content
+        model.palette = BreakIslandRules.palette(for: content.tone ?? .work, settings: settings)
+        model.wing = BreakIslandController.wingWidth(for: content)
+        model.isOpen = true
+        let width = model.notch.middleWidth + model.wing * 2
+        return ZStack(alignment: .top) {
+            LinearGradient(colors: [Color(red: 0.13, green: 0.15, blue: 0.22), Color(red: 0.05, green: 0.05, blue: 0.08)],
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+            IslandView(model: model, liveBlur: false)
+                .frame(width: width + 40, height: 37)
+            UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 9, bottomTrailingRadius: 9,
+                                   topTrailingRadius: 0, style: .continuous)
+                .fill(Color.black)
+                .frame(width: model.notch.middleWidth, height: 37)
+        }
+        .frame(width: max(width + 60, 560), height: 70)
+    }
+
+    func testRenderNotchIsland() throws {
+        try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
+        let now = Date()
+        let states = VStack(spacing: 0) {
+            island(NoticeContent(title: "Working", countdownTo: now.addingTimeInterval(38 * 60 + 12),
+                                 face: .smug, tone: .work, sticky: true))
+            island(NoticeContent(title: "Break", countdownTo: now.addingTimeInterval(8 * 60 + 54),
+                                 face: .happy, tone: .onBreak, sticky: true))
+            island(NoticeContent(title: "Come back!", countUpFrom: now.addingTimeInterval(-192),
+                                 face: .furious, tone: .away, sticky: true))
+        }
+        try save(states, as: "preview-notch-island.png")
+    }
+
+    func testRenderTypePicker() throws {
+        try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
+        func row(_ text: String, chosen: ItemType? = nil) -> some View {
+            var parsed: ParsedItem? = text.isEmpty ? nil : ItemParser.parse(text)
+            parsed?.chosen = chosen
+            return HStack(spacing: 8) {
+                Text(text.isEmpty ? "Drink water every 40 minutes #health" : text)
+                    .font(theme.font)
+                    .foregroundStyle(theme.text.opacity(text.isEmpty ? 0.35 : 1))
+                Spacer()
+                TypePicker(preview: parsed, theme: theme)
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(parsed == nil ? theme.text.opacity(0.25) : ReminderRowView.onColor)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(width: ReminderPanelController.expandedSize.width)
+            .background(theme.background.opacity(theme.backgroundOpacity))
+        }
+        let rows = VStack(spacing: 6) {
+            row("")
+            row("drink water every 1 minute")
+            row("drink water every 1 minute", chosen: .habit)
+            row("finish the Sharma teaser")
+            row("work 40 min rest 10 min")
+        }
+        .padding(10)
+        .background(Color(white: 0.5))
+        try save(rows, as: "preview-type-picker.png")
+    }
+
+    func testRenderReminderPopup() throws {
+        try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
+        let popup = NoticePillView(content: NoticeContent(title: "Drink water", detail: "Stay hydrated, stay sharp."))
+            .frame(width: NoticePillController.size.width, height: NoticePillController.size.height)
+            .padding(10)
+            .background(Color(white: 0.5))
+        try save(popup, as: "preview-reminder-popup.png")
+    }
 }

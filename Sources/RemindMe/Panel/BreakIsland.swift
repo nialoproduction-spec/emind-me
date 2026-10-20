@@ -58,11 +58,16 @@ extension NSScreen {
 /// Which colours the notch uses.
 enum IslandTone: String, Codable { case work, onBreak, away }
 
-/// The notch's colours for one state: the shape, its text, and the time.
+/// The notch's colours for one state: the glass tint, its text, the time,
+/// and (away) the left side's alarm colour.
 struct IslandPalette: Equatable {
     var background: RGBColor
     var text: RGBColor
     var time: RGBColor
+    /// Away after a break: the left side turns this colour (red) and pulses.
+    var leftWing: RGBColor? = nil
+    /// Text on the left side (differs from `text` when `leftWing` is set).
+    var leftText: RGBColor
 }
 
 @MainActor
@@ -75,12 +80,14 @@ enum BreakIslandRules {
         switch tone {
         case .work:
             let text = onTop(settings.workColor)
-            return IslandPalette(background: settings.workColor, text: text, time: text)
+            return IslandPalette(background: settings.workColor, text: text, time: text, leftText: text)
         case .onBreak:
             let text = onTop(settings.breakColor)
-            return IslandPalette(background: settings.breakColor, text: text, time: text)
+            return IslandPalette(background: settings.breakColor, text: text, time: text, leftText: text)
         case .away:
-            return IslandPalette(background: settings.workColor, text: onTop(settings.workColor), time: settings.awayColor)
+            let text = onTop(settings.workColor)
+            return IslandPalette(background: settings.workColor, text: text, time: settings.awayColor,
+                                 leftWing: settings.awayColor, leftText: onTop(settings.awayColor))
         }
     }
 
@@ -116,33 +123,33 @@ final class IslandModel: ObservableObject {
     @Published var palette = BreakIslandRules.palette(for: .work, settings: BreakTimerSettings())
 }
 
+/// The island: liquid glass tinted per state (black working, soft blue on a
+/// break), face + title left of the notch, the time right of it. Away after
+/// a break, the left side turns red and pulses while an angry face shakes.
 struct IslandView: View {
     @ObservedObject var model: IslandModel
     var onTap: () -> Void = {}
+    /// The real blur behind the glass. Off for preview images, which can't
+    /// draw AppKit views.
+    var liveBlur = true
 
     var body: some View {
         let notch = model.notch
         let wing = model.isOpen ? model.wing : 0
+        let palette = model.palette
         ZStack(alignment: .top) {
-            UnevenRoundedRectangle(
-                topLeadingRadius: 0,
-                bottomLeadingRadius: IslandGeometry.cornerRadius,
-                bottomTrailingRadius: IslandGeometry.cornerRadius,
-                topTrailingRadius: 0,
-                style: .continuous
-            )
-            .fill(model.palette.background.color)
-            .frame(width: notch.middleWidth + wing * 2, height: notch.height)
-            .opacity(model.isOpen || notch.hasNotch ? 1 : 0)
+            IslandGlass(palette: palette, wing: wing, middle: notch.middleWidth, liveBlur: liveBlur)
+                .frame(width: notch.middleWidth + wing * 2, height: notch.height)
+                .opacity(model.isOpen || notch.hasNotch ? 1 : 0)
 
             if let content = model.content {
                 HStack(spacing: 0) {
                     HStack(spacing: 7) {
-                        if let face = content.face { FaceGlyph(face: face) }
+                        if let face = content.face { IslandFace(face: face, tone: content.tone ?? .work) }
                         Text(content.title)
                             .font(.system(size: IslandGeometry.font, weight: .semibold))
                     }
-                    .foregroundStyle(model.palette.text.color)
+                    .foregroundStyle(palette.leftText.color)
                     .lineLimit(1)
                     .padding(.trailing, IslandGeometry.innerGap)
                     .frame(width: wing, alignment: .trailing)
@@ -153,10 +160,10 @@ struct IslandView: View {
                         if let detail = content.detail {
                             Text(detail)
                                 .font(.system(size: IslandGeometry.font))
-                                .foregroundStyle(model.palette.text.color.opacity(0.8))
+                                .foregroundStyle(palette.text.color.opacity(0.8))
                         }
-                        if let end = content.countdownTo { Countdown(end: end, color: model.palette.time.color) }
-                        if let start = content.countUpFrom { CountUp(start: start, color: model.palette.time.color) }
+                        if let end = content.countdownTo { Countdown(end: end, color: palette.time.color) }
+                        if let start = content.countUpFrom { CountUp(start: start, color: palette.time.color) }
                     }
                     .lineLimit(1)
                     .padding(.leading, IslandGeometry.innerGap)
@@ -172,6 +179,138 @@ struct IslandView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
+    }
+}
+
+/// The glass itself. On macOS 26 built with Xcode 26, Apple's own Liquid
+/// Glass; otherwise the system blur with a tint, a lit rim along the edges
+/// and a soft sheen on top, so it reads as glass rather than paint.
+struct IslandGlass: View {
+    let palette: IslandPalette
+    let wing: CGFloat
+    let middle: CGFloat
+    var liveBlur = true
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pulse = false
+
+    static let tintOpacity = 0.74
+
+    private var shape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: 0,
+            bottomLeadingRadius: IslandGeometry.cornerRadius,
+            bottomTrailingRadius: IslandGeometry.cornerRadius,
+            topTrailingRadius: 0,
+            style: .continuous
+        )
+    }
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            base
+            // Away: the left side runs red, breathing in and out.
+            if let alarm = palette.leftWing {
+                Rectangle()
+                    .fill(alarm.color.opacity(pulse ? 0.95 : 0.6))
+                    .frame(width: wing + middle / 2)
+                    .onAppear {
+                        guard !reduceMotion else { pulse = true; return }
+                        withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { pulse = true }
+                    }
+            }
+            // Sheen: light on top, fading down, like curved glass.
+            LinearGradient(colors: [Color.white.opacity(0.22), Color.white.opacity(0.0)],
+                           startPoint: .top, endPoint: .center)
+        }
+        .clipShape(shape)
+        // Lit rim: brighter along the bottom curve where light gathers.
+        .overlay(
+            shape.strokeBorder(
+                LinearGradient(colors: [Color.white.opacity(0.08), Color.white.opacity(0.42)],
+                               startPoint: .top, endPoint: .bottom),
+                lineWidth: 1
+            )
+        )
+        .shadow(color: .black.opacity(0.35), radius: 6, y: 3)
+    }
+
+    @ViewBuilder
+    private var base: some View {
+        let tint = palette.background.color
+        #if compiler(>=6.2)
+        if #available(macOS 26.0, *), liveBlur {
+            Rectangle().fill(.clear)
+                .glassEffect(.regular.tint(tint.opacity(Self.tintOpacity)), in: shape)
+        } else {
+            fallbackBase(tint)
+        }
+        #else
+        fallbackBase(tint)
+        #endif
+    }
+
+    @ViewBuilder
+    private func fallbackBase(_ tint: Color) -> some View {
+        ZStack {
+            if liveBlur { SystemBlur() }
+            Rectangle().fill(tint.opacity(Self.tintOpacity))
+        }
+    }
+}
+
+/// The blurred backdrop behind the glass.
+private struct SystemBlur: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .hudWindow
+        view.blendingMode = .behindWindow
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
+}
+
+/// The little face, alive: working, it blinks now and then; on a break it
+/// bobs gently; away, it's furious and shakes. Still when Reduce Motion is on.
+struct IslandFace: View {
+    let face: Face
+    let tone: IslandTone
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var blinking = false
+    @State private var bob = false
+    @State private var shake: Double = 0
+
+    var body: some View {
+        FaceGlyph(face: blinking ? .sleepy : face)
+            .offset(y: tone == .onBreak ? (bob ? -1.2 : 1.2) : 0)
+            .rotationEffect(.degrees(shake))
+            .task(id: tone) { await animate() }
+    }
+
+    @MainActor private func animate() async {
+        guard !reduceMotion else { return }
+        switch tone {
+        case .work:
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3.6))
+                blinking = true
+                try? await Task.sleep(for: .milliseconds(140))
+                blinking = false
+            }
+        case .onBreak:
+            withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) { bob = true }
+        case .away:
+            while !Task.isCancelled {
+                for angle in [-14.0, 12, -9, 6, 0] {
+                    withAnimation(.easeInOut(duration: 0.07)) { shake = angle }
+                    try? await Task.sleep(for: .milliseconds(70))
+                }
+                try? await Task.sleep(for: .seconds(1.6))
+            }
+        }
     }
 }
 
@@ -344,7 +483,7 @@ final class BreakIslandController {
             return
         }
 
-        let wing = wingWidth(for: content)
+        let wing = Self.wingWidth(for: content)
         // Grow the window first (the shape is centred, so it doesn't move),
         // animate the shape, then trim the window to fit.
         let roomy = max(wing, model.isOpen ? model.wing : 0)
@@ -378,7 +517,7 @@ final class BreakIslandController {
 
     // MARK: - Sizing (what the text needs)
 
-    private func wingWidth(for content: NoticeContent) -> CGFloat {
+    static func wingWidth(for content: NoticeContent) -> CGFloat {
         let semibold = NSFont.systemFont(ofSize: IslandGeometry.font, weight: .semibold)
         let regular = NSFont.systemFont(ofSize: IslandGeometry.font)
         func width(_ text: String, _ font: NSFont) -> CGFloat {
