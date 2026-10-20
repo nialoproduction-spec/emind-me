@@ -116,8 +116,9 @@ struct SmartSettingsView: View {
     @ViewBuilder
     private var breakTimerSection: some View {
         Text("Break timer").font(.headline)
-        Toggle("Keep the work countdown at the notch", isOn: $breakTimer.value.keepWorkCountdown)
-        Text("Off: it shows when work starts, with 10 minutes left and for the last 10 seconds. Breaks always show. Click it at the notch to hide it.")
+        Toggle("Work countdown always counting", isOn: $breakTimer.value.workCountdownStays)
+        Toggle("\"Working\" / \"Break\" always shown", isOn: $breakTimer.value.wordsStay)
+        Text("Both on: it never disappears, and the last 10 seconds say \"Work ends in\" 10 … 0. Countdown off: work only shows when it starts, with 10 minutes left and for the last 10 seconds. Words off: just the face and the time.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)

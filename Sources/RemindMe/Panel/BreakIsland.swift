@@ -111,15 +111,17 @@ enum BreakIslandRules {
         phase != .work || keepWorkCountdown
     }
 
-    /// What the notch shows for the running timer between moments: just
-    /// the face and the time, as small as it gets. The words ("Working",
-    /// "Break") come with the moments themselves.
-    static func content(for state: BreakCycleState) -> NoticeContent {
+    /// What the notch shows for the running timer between moments: the
+    /// face, "Working" / "Break" and the time, counting. With `wordsStay`
+    /// off, just the face and the time (the words come with the moments).
+    static func content(for state: BreakCycleState, wordsStay: Bool = true) -> NoticeContent {
         switch state.phase {
         case .work:
-            return NoticeContent(title: "", countdownTo: state.phaseEnd, face: .smug, tone: .work, sticky: true)
+            return NoticeContent(title: wordsStay ? "Working" : "", countdownTo: state.phaseEnd,
+                                 face: .smug, tone: .work, sticky: true)
         case .onBreak:
-            return NoticeContent(title: "", countdownTo: state.phaseEnd, face: .sleepy, tone: .onBreak, sticky: true)
+            return NoticeContent(title: wordsStay ? "Break" : "", countdownTo: state.phaseEnd,
+                                 face: .sleepy, tone: .onBreak, sticky: true)
         case .waiting:
             return BreakCycleManager.waitingNotice(for: state)
         }
@@ -230,7 +232,8 @@ struct IslandBody: View {
                                 .fixedSize()
                         }
                         if let end = content.countdownTo {
-                            Countdown(end: end, color: palette.time.color, size: layout.time.size)
+                            Countdown(end: end, color: palette.time.color, size: layout.time.size,
+                                      secondsOnly: content.secondsOnly)
                         }
                         if let start = content.countUpFrom {
                             CountUp(start: start, color: palette.time.color, size: layout.time.size)
@@ -456,9 +459,12 @@ private struct Countdown: View {
     let end: Date
     let color: Color
     var size: Double = 1
+    /// "10", "9" … "0" instead of "0:10".
+    var secondsOnly = false
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            Text(BreakCycleState.clockString(end.timeIntervalSince(context.date)))
+            let left = end.timeIntervalSince(context.date)
+            Text(secondsOnly ? BreakCycleState.secondsString(left) : BreakCycleState.clockString(left))
                 .font(.system(size: IslandGeometry.font * size, weight: .bold, design: .rounded).monospacedDigit())
                 .foregroundStyle(color)
         }
@@ -509,11 +515,11 @@ final class IslandPanel: NSPanel {
 // MARK: - Controller
 
 /// The break timer lives here, not in the menu bar: one look per state —
-/// face + "Working" + countdown, face + "Break" + countdown, or "Break over ·
-/// Waiting". The work countdown stays out if "keep at the notch" is on
-/// (Settings, the list's pin, or the menu bar's right-click menu); if off, it
-/// only peeks at the start, with 10 minutes left and for the last 10 seconds.
-/// Clicking it while working hides it (turns "keep" off).
+/// face + "Working" + countdown, face + "Break" + countdown, or "Come back!"
+/// counting up. The last 10 seconds of work say "Work ends in" 10 … 0. The
+/// work countdown stays the whole time by default; off (Settings, the list's
+/// pin, or the menu bar's right-click menu), it only peeks at the start, with
+/// 10 minutes left and for the last 10 seconds. A click never hides it.
 @MainActor
 final class BreakIslandController {
     static let shared = BreakIslandController()
@@ -572,15 +578,10 @@ final class BreakIslandController {
         peek = nil
     }
 
-    /// Clicked: while working, put the countdown away (and keep it away).
+    /// Clicked: puts away a moment that would go by itself anyway. The
+    /// work countdown itself never hides on a click (it used to, by accident).
     private func tapped() {
-        if state?.phase == .work {
-            settings.value.keepWorkCountdown = false
-            clearPeek()
-            refresh()
-        } else if peek != nil {
-            hide()
-        }
+        if let peek, !peek.sticky { hide() }
     }
 
     /// What should be on screen right now.
@@ -589,7 +590,7 @@ final class BreakIslandController {
         guard let state,
               BreakIslandRules.showsAmbient(phase: state.phase, keepWorkCountdown: settings.value.keepWorkCountdown)
         else { return nil }
-        return BreakIslandRules.content(for: state)
+        return BreakIslandRules.content(for: state, wordsStay: settings.value.wordsStay)
     }
 
     private func refresh() {
@@ -693,7 +694,8 @@ final class BreakIslandController {
         if let detail = content.detail { right += width(detail, rounded(timeFont, .regular)) }
         let digits = rounded(timeFont, .bold, digits: true)
         if let end = content.countdownTo {
-            right += (right > 0 ? gap : 0) + width(end.timeIntervalSinceNow >= 3600 ? "0:00:00" : "00:00", digits)
+            let sample = content.secondsOnly ? "00" : (end.timeIntervalSinceNow >= 3600 ? "0:00:00" : "00:00")
+            right += (right > 0 ? gap : 0) + width(sample, digits)
         }
         if let start = content.countUpFrom {
             let long = Date().timeIntervalSince(start) >= 3000

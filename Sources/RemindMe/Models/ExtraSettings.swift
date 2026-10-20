@@ -167,10 +167,13 @@ struct RGBColor: Codable, Equatable, Hashable {
 }
 
 struct BreakTimerSettings: Codable, Equatable {
-    /// Keep the work countdown at the notch the whole time (on), or only
-    /// show it at the start, with 10 minutes left and for the last 10
-    /// seconds (off). Breaks always show.
-    var keepWorkCountdown = true
+    /// The work countdown stays at the notch the whole time, counting, and
+    /// never hides (on, the default), or only shows at the start, with 10
+    /// minutes left and for the last 10 seconds (off). Breaks always show.
+    var workCountdownStays = true
+    /// "Working" / "Break" stay next to the face the whole time (on, the
+    /// default); off: just the face and the time between moments.
+    var wordsStay = true
     /// The notch's colour while working.
     var workColor = RGBColor.black
     /// The notch's colour on a break.
@@ -180,15 +183,26 @@ struct BreakTimerSettings: Codable, Equatable {
     /// Where the face, z's, word and time sit, and how big the notch is.
     var layout = IslandLayout()
 
+    /// The older name, still used by the list's pin and the right-click menu.
+    var keepWorkCountdown: Bool {
+        get { workCountdownStays }
+        set { workCountdownStays = newValue }
+    }
+
     init() {}
 
-    private enum CodingKeys: String, CodingKey { case keepWorkCountdown, workColor, breakColor, awayColor, layout }
+    private enum CodingKeys: String, CodingKey {
+        case workCountdownStays, wordsStay, workColor, breakColor, awayColor, layout
+    }
 
     /// Settings saved before colours or the layout existed still load (and
-    /// keep their choices).
+    /// keep their choices). The old "keepWorkCountdown" is ignored on
+    /// purpose: a click at the notch used to turn it off by accident, and
+    /// the countdown staying is the default now.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        keepWorkCountdown = try c.decodeIfPresent(Bool.self, forKey: .keepWorkCountdown) ?? true
+        workCountdownStays = try c.decodeIfPresent(Bool.self, forKey: .workCountdownStays) ?? true
+        wordsStay = try c.decodeIfPresent(Bool.self, forKey: .wordsStay) ?? true
         workColor = try c.decodeIfPresent(RGBColor.self, forKey: .workColor) ?? .black
         breakColor = try c.decodeIfPresent(RGBColor.self, forKey: .breakColor) ?? .breakBlue
         awayColor = try c.decodeIfPresent(RGBColor.self, forKey: .awayColor) ?? .awayRed

@@ -161,6 +161,11 @@ struct BreakCycleState: Codable, Equatable {
         return String(format: "+%d:%02d", total / 60, total % 60)
     }
 
+    /// "10", "9" … "0": the last seconds, counted plainly.
+    static func secondsString(_ seconds: TimeInterval) -> String {
+        String(Int(max(0, seconds).rounded(.up)))
+    }
+
     static func clockString(_ seconds: TimeInterval) -> String {
         let total = Int(max(0, seconds).rounded(.up))
         if total >= 3600 {
@@ -388,17 +393,20 @@ final class BreakCycleManager: ObservableObject {
         )
     }
 
-    /// With 10 minutes left, and for the last 10 seconds (stays, counting to
-    /// 0:00): the same "Working" / "Break" look, shown again.
+    /// With 10 minutes left: the same "Working" / "Break" look, shown
+    /// again. For the last 10 seconds of work it stays, saying "Work ends
+    /// in" and counting 10 … 0.
     static func milestoneNotice(_ milestone: BreakCycleState.Milestone, for state: BreakCycleState) -> NoticeContent {
         let onBreak = state.phase == .onBreak
+        let workEnding = milestone == .lastSeconds && !onBreak
         return NoticeContent(
-            title: onBreak ? "Break" : "Working",
+            title: onBreak ? "Break" : (workEnding ? "Work ends in" : "Working"),
             countdownTo: state.phaseEnd,
             face: onBreak ? .sleepy : .smug,
             tone: onBreak ? .onBreak : .work,
             sticky: milestone == .lastSeconds,
-            duration: 6
+            duration: 6,
+            secondsOnly: workEnding
         )
     }
 

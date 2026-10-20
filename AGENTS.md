@@ -61,8 +61,10 @@ Sources/RemindMe/
                                  taps (only felt with a finger on the trackpad), "Sayonara.", dissolve
     BreakIsland.swift            the break timer's home, at the camera notch: solid colours (the pick
                                  shows exactly; glass was tried and dropped). Compact: each side only
-                                 as wide as its own content (asymmetric around the notch); between
-                                 moments just face + time, words only with the moments. Living faces
+                                 as wide as its own content (asymmetric around the notch); by default
+                                 face + "Working"/"Break" + time stay up the whole time, counting
+                                 (`wordsStay`; off = just face + time between moments); the last 10 s
+                                 of work say "Work ends in" 10 … 0 (`secondsOnly`). Living faces
                                  (blink / sleepy bob + drifting z's / angry shake), breathing break;
                                  on a break the left side is wider by `zRoom` so the z's float in
                                  view instead of under the camera; every part's position and size,
@@ -72,7 +74,9 @@ Sources/RemindMe/
                                  from plain values so the editor and the notch share it;
                                  "Working" / "Break" + countdown, or
                                  "Come back!" with a red pulsing left side and red +time away; work
-                                 countdown kept or hidden (`BreakTimerSettings.keepWorkCountdown`);
+                                 countdown always counting by default (`BreakTimerSettings.workCountdownStays`, alias
+                                 `keepWorkCountdown`; the old saved key is ignored on purpose); a click
+                                 never hides it (it used to, and the user lost it by accident);
                                  colours per state (`IslandPalette`: work black, break #C5D2E5, time
                                  away counted up in red), set in Settings → Smart;
                                  BreakIslandRules / IslandGeometry = pure, tested

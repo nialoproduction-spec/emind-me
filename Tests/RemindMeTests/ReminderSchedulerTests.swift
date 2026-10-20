@@ -364,7 +364,9 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertLessThanOrEqual(compact.left, 50, "just the face")
         XCTAssertLessThanOrEqual(compact.right, 70, "just the time")
         let state = BreakCycleState.started(BreakCycleConfig(workMinutes: 40, breakMinutes: 10), at: now)
-        XCTAssertTrue(BreakIslandRules.content(for: state).title.isEmpty, "between moments: no words")
+        XCTAssertTrue(BreakIslandRules.content(for: state, wordsStay: false).title.isEmpty,
+                      "words off: between moments, no words")
+        XCTAssertEqual(BreakIslandRules.content(for: state).title, "Working", "by default the word stays")
     }
 
     @MainActor
@@ -372,7 +374,7 @@ final class ReminderSchedulerTests: XCTestCase {
         // Settings saved before the layout existed still load, untouched.
         let old = #"{"keepWorkCountdown":false,"workColor":{"r":0,"g":0,"b":0}}"#.data(using: .utf8)!
         let loaded = try JSONDecoder().decode(BreakTimerSettings.self, from: old)
-        XCTAssertFalse(loaded.keepWorkCountdown)
+        XCTAssertTrue(loaded.keepWorkCountdown, "always counting is the default now")
         XCTAssertEqual(loaded.layout, IslandLayout())
 
         var layout = IslandLayout()

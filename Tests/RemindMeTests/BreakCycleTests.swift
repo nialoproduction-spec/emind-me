@@ -224,7 +224,8 @@ final class BreakCycleManagerTests: XCTestCase {
         now.addTimeInterval(10 * 60 - 10) // 10 seconds left
         manager.tick()
         let last = try XCTUnwrap(popups.last ?? nil)
-        XCTAssertEqual(last.title, "Working", "no \"Break in\": the same face and countdown")
+        XCTAssertEqual(last.title, "Work ends in")
+        XCTAssertTrue(last.secondsOnly, "counting 10 … 0")
         XCTAssertTrue(last.sticky, "the last seconds stay on screen, counting")
         manager.tick()
         XCTAssertEqual(popups.count, 3, "and it isn't re-shown every tick")
@@ -250,7 +251,7 @@ final class BreakCycleManagerTests: XCTestCase {
         XCTAssertEqual(titles, ["Working"])
         now.addTimeInterval(50)
         manager.tick()
-        XCTAssertEqual(titles.last, "Working")
+        XCTAssertEqual(titles.last, "Work ends in")
         XCTAssertEqual(popups.last??.sticky, true)
         now.addTimeInterval(10)
         manager.tick()
@@ -432,7 +433,8 @@ final class BreakCycleManagerTests: XCTestCase {
     func testOldBreakTimerSettingsStillLoad() throws {
         let old = #"{"keepWorkCountdown":false}"#.data(using: .utf8)!
         let settings = try JSONDecoder().decode(BreakTimerSettings.self, from: old)
-        XCTAssertFalse(settings.keepWorkCountdown, "the choice is kept")
+        XCTAssertTrue(settings.keepWorkCountdown, "an old accidental hide goes back to always counting")
+        XCTAssertTrue(settings.wordsStay)
         XCTAssertEqual(settings.breakColor, .breakBlue)
         let roundTrip = try JSONDecoder().decode(BreakTimerSettings.self, from: JSONEncoder().encode(settings))
         XCTAssertEqual(roundTrip, settings)
@@ -442,6 +444,16 @@ final class BreakCycleManagerTests: XCTestCase {
         XCTAssertEqual(BreakCycleState.elapsedString(0), "+0:00")
         XCTAssertEqual(BreakCycleState.elapsedString(65.9), "+1:05")
         XCTAssertEqual(BreakCycleState.elapsedString(3725), "+1:02:05")
+    }
+
+    func testWorkStaysWithItsWordAndCountsDownTheLastSeconds() {
+        let state = BreakCycleState.started(BreakCycleConfig(workMinutes: 40, breakMinutes: 10), at: Date())
+        let stays = BreakIslandRules.content(for: state)
+        XCTAssertEqual(stays.title, "Working", "the word stays by default")
+        XCTAssertEqual(BreakIslandRules.content(for: state, wordsStay: false).title, "", "words off: face and time")
+        XCTAssertEqual(BreakCycleState.secondsString(9.2), "10")
+        XCTAssertEqual(BreakCycleState.secondsString(0), "0")
+        XCTAssertEqual(BreakCycleState.secondsString(-3), "0")
     }
 
     func testIslandShowsWorkOnlyWhenKept() {

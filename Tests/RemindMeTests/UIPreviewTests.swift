@@ -393,6 +393,8 @@ final class UIPreviewTests: XCTestCase {
             // The moments, with words.
             island(NoticeContent(title: "Working", countdownTo: now.addingTimeInterval(38 * 60 + 12),
                                  face: .smug, tone: .work, sticky: true))
+            island(NoticeContent(title: "Work ends in", countdownTo: now.addingTimeInterval(7),
+                                 face: .smug, tone: .work, sticky: true, secondsOnly: true))
             island(NoticeContent(title: "Break", countdownTo: now.addingTimeInterval(8 * 60 + 54),
                                  face: .sleepy, tone: .onBreak, sticky: true))
             island(NoticeContent(title: "Break", countdownTo: now.addingTimeInterval(8 * 60 + 54),

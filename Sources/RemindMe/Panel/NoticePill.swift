@@ -21,6 +21,8 @@ struct NoticeContent: Equatable {
     /// `duration` seconds.
     var sticky = false
     var duration: TimeInterval = 6
+    /// The countdown in plain seconds ("10", "9" … "0"), for the last ones.
+    var secondsOnly = false
     var id = UUID()
 }
 
