@@ -389,6 +389,19 @@ final class UIPreviewTests: XCTestCase {
         try save(states, as: "preview-notch-island.png")
     }
 
+    /// The whole Smart settings tab at the sheet's real width (340 with 20
+    /// padding), at full length, to catch anything running off the edges.
+    func testRenderSmartSettingsFull() throws {
+        try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
+        let view = SmartSettingsView()
+            .frame(width: 300)
+            .padding(20)
+            .frame(width: 340)
+            .background(Color(white: 0.16))
+            .environment(\.colorScheme, .dark)
+        try save(view, as: "preview-12-smart-settings-full.png")
+    }
+
     func testRenderTypePicker() throws {
         try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
         func row(_ text: String, chosen: ItemType? = nil) -> some View {

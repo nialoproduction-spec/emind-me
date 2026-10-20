@@ -33,6 +33,8 @@ struct SmartSettingsView: View {
             Divider()
             categoriesSection
         }
+        // Everything wraps to the sheet's width; nothing runs off the edges.
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Reminder popup
@@ -41,7 +43,7 @@ struct SmartSettingsView: View {
     private var reminderPopupSection: some View {
         Text("Reminder popup").font(.headline)
         HStack {
-            Picker("Stays on screen for", selection: $reminderPopup.value.seconds) {
+            Picker("Stays for", selection: $reminderPopup.value.seconds) {
                 ForEach(ReminderPopupSettings.choices, id: \.self) { seconds in
                     Text(ReminderPopupSettings.label(seconds)).tag(seconds)
                 }
@@ -119,11 +121,21 @@ struct SmartSettingsView: View {
         }
     }
 
-    /// Quick colour picks, plus the system picker for anything else.
+    /// Quick colour picks, plus the system picker for anything else. The
+    /// label sits above the swatches so the row fits the sheet.
     private func colorRow(_ label: String, _ value: Binding<RGBColor>) -> some View {
-        HStack(spacing: 5) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(label)
-                .frame(width: 70, alignment: .leading)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            FlowLayout(spacing: 2) {
+                swatches(value)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func swatches(_ value: Binding<RGBColor>) -> some View {
             ForEach(RGBColor.swatches, id: \.self) { swatch in
                 Button { value.wrappedValue = swatch } label: {
                     Circle()
@@ -146,7 +158,6 @@ struct SmartSettingsView: View {
             ), supportsOpacity: false)
             .labelsHidden()
             .help("Any colour")
-        }
     }
 
     // MARK: - Goal check-in
