@@ -50,8 +50,9 @@ struct SmartSettingsView: View {
             .fixedSize()
             Button("Try it") {
                 NoticePillController.shared.show(
-                    ReminderScheduler.popupContent(title: "Drink water", schedule: "every 40 minutes",
-                                                   category: "Health", settings: reminderPopup.value)
+                    ReminderScheduler.popupContent(title: "Drink water",
+                                                   quote: ReminderQuotes.quote(for: "Drink water", pick: Int.random(in: 0..<100)),
+                                                   settings: reminderPopup.value)
                 )
             }
             .controlSize(.small)

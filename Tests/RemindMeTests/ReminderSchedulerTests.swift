@@ -106,13 +106,21 @@ final class ReminderSchedulerTests: XCTestCase {
         let shown = try XCTUnwrap(notices.last)
         XCTAssertEqual(shown.duration, 20)
         XCTAssertFalse(shown.sticky)
-        XCTAssertEqual(shown.detail, "Every 40 minutes")
-        XCTAssertEqual(shown.category, "Health")
+        let quote = try XCTUnwrap(shown.detail)
+        XCTAssertTrue(ReminderQuotes.choices(for: "Drink water").contains(quote), "a water quote for a water reminder")
 
         let untilClicked = ReminderScheduler.popupContent(
-            title: "Stretch", schedule: "", category: nil, settings: ReminderPopupSettings(seconds: 0))
+            title: "Stretch", quote: "Motion is lotion.", settings: ReminderPopupSettings(seconds: 0))
         XCTAssertTrue(untilClicked.sticky, "0 = stays until clicked")
-        XCTAssertEqual(untilClicked.detail, "Due now")
+    }
+
+    func testQuotesMatchTheReminder() {
+        XCTAssertTrue(ReminderQuotes.choices(for: "Drink water").contains("Stay hydrated, stay sharp."))
+        XCTAssertTrue(ReminderQuotes.choices(for: "Stretch my back").contains("Motion is lotion."))
+        XCTAssertTrue(ReminderQuotes.choices(for: "Rest my eyes").contains("Blink. Breathe. Back to it."))
+        XCTAssertTrue(ReminderQuotes.choices(for: "Export the Sharma teaser").contains("Small steps, every day."),
+                      "anything else gets a general one")
+        XCTAssertFalse(ReminderQuotes.quote(for: "Drink water", pick: -7).isEmpty, "any pick works")
     }
 
     func testJustRemindIsHeldWhileFocusIsOn() throws {

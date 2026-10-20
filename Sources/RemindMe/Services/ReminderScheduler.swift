@@ -254,20 +254,19 @@ final class ReminderScheduler: ObservableObject {
         }
         item.nextFireDate = next
         guard !held else { return }
-        showNotice(Self.popupContent(title: item.title, schedule: item.scheduleSummary,
-                                     category: item.category, settings: popupSettings.value))
+        showNotice(Self.popupContent(title: item.title,
+                                     quote: ReminderQuotes.quote(for: item.title, pick: Int.random(in: 0..<1000)),
+                                     settings: popupSettings.value))
     }
 
 
-    /// A reminder's popup: "Drink water", "Every 40 minutes", its category,
-    /// staying as long as Settings says (or until clicked).
-    nonisolated static func popupContent(title: String, schedule: String, category: String?,
+    /// A reminder's popup: the title and a short quote, staying as long as
+    /// Settings says (or until clicked).
+    nonisolated static func popupContent(title: String, quote: String,
                                          settings: ReminderPopupSettings) -> NoticeContent {
-        let line = schedule.isEmpty ? "Due now" : schedule.prefix(1).uppercased() + schedule.dropFirst()
-        return NoticeContent(
+        NoticeContent(
             title: title,
-            detail: line,
-            category: category,
+            detail: quote,
             sticky: settings.seconds == 0,
             duration: TimeInterval(max(settings.seconds, 1))
         )

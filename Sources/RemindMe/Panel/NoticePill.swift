@@ -24,122 +24,52 @@ struct NoticeContent: Equatable {
     var id = UUID()
 }
 
-/// The reminder popup, macOS-notification style: frosted glass, a blue
-/// app-icon tile with a bell that rings as it arrives, the title in bold with
-/// "now" on the right, the schedule and category underneath, and a thin line
-/// along the bottom that runs down until it goes away.
+/// A reminder's popup: the same card as a habit's (the panel's own look and
+/// theme, the animated face, the title) but with no buttons — just a short
+/// quote under the title. Click it to put it away.
 struct NoticePillView: View {
     let content: NoticeContent
     var onTap: () -> Void = {}
 
-    @State private var bellAngle: Double = 0
-    @State private var remaining: CGFloat = 1
-
-    static let titleFont = NSFont.systemFont(ofSize: 14, weight: .semibold)
-    static let lineFont = NSFont.systemFont(ofSize: 12)
+    @ObservedObject private var themeStore = ThemeStore.shared
 
     var body: some View {
-        HStack(spacing: 12) {
-            iconTile
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(content.title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white)
-                    Spacer(minLength: 4)
-                    Text("now")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.45))
-                }
-                HStack(spacing: 6) {
-                    if let detail = content.detail {
-                        Text(detail)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white.opacity(0.65))
-                    }
-                    if let category = content.category {
-                        HStack(spacing: 4) {
-                            Circle().fill(CategoryStyle.color(for: category)).frame(width: 6, height: 6)
-                            Text(category)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(CategoryStyle.color(for: category))
-                        }
-                    }
-                }
+        let theme = themeStore.theme
+        VStack(spacing: 6) {
+            AnimatedFaceView(mood: .gentle, color: theme.text)
+
+            Text(content.title)
+                .font(theme.titleFont)
+                .foregroundStyle(theme.text)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity)
+
+            if let quote = content.detail {
+                Text("“\(quote)”")
+                    .font(.system(size: max(theme.fontSize - 2, 10)).italic())
+                    .foregroundStyle(theme.text.opacity(0.55))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .lineLimit(1)
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 14)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(
-            ZStack {
-                FrostedGlass()
-                Color.black.opacity(0.12)
-            }
+            RoundedRectangle(cornerRadius: theme.cornerRadius, style: .continuous)
+                .fill(theme.background.opacity(theme.backgroundOpacity))
+                .overlay(
+                    RoundedRectangle(cornerRadius: theme.cornerRadius, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                )
         )
-        .overlay(alignment: .bottom) {
-            if !content.sticky {
-                GeometryReader { geo in
-                    Capsule()
-                        .fill(Color.white.opacity(0.28))
-                        .frame(width: geo.size.width * remaining, height: 2)
-                }
-                .frame(height: 2)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 5)
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
-        )
-        .environment(\.colorScheme, .dark)
+        .clipShape(RoundedRectangle(cornerRadius: theme.cornerRadius, style: .continuous))
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
-        .onAppear {
-            guard !content.sticky else { return }
-            withAnimation(.linear(duration: content.duration)) { remaining = 0 }
-        }
-        .task {
-            // A little ring as it arrives.
-            for angle in [16.0, -13, 9, -5, 0] {
-                withAnimation(.easeInOut(duration: 0.11)) { bellAngle = angle }
-                try? await Task.sleep(for: .milliseconds(110))
-            }
-        }
     }
-
-    private var iconTile: some View {
-        RoundedRectangle(cornerRadius: 9, style: .continuous)
-            .fill(LinearGradient(
-                colors: [Color(red: 0.36, green: 0.64, blue: 1.0), Color(red: 0.16, green: 0.42, blue: 0.96)],
-                startPoint: .top, endPoint: .bottom
-            ))
-            .frame(width: 36, height: 36)
-            .overlay(
-                Image(systemName: "bell.fill")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .rotationEffect(.degrees(bellAngle), anchor: .top)
-            )
-            .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
-    }
-}
-
-/// The blurred, see-through backdrop macOS uses for notifications and HUDs.
-struct FrostedGlass: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = .hudWindow
-        view.blendingMode = .behindWindow
-        view.state = .active
-        view.appearance = NSAppearance(named: .vibrantDark)
-        return view
-    }
-
-    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
 }
 
 /// Reminders' popup (the break timer has its own, at the notch: see
@@ -150,20 +80,8 @@ struct FrostedGlass: NSViewRepresentable {
 final class NoticePillController {
     static let shared = NoticePillController()
 
-    static let height: CGFloat = 64
-
-    /// As wide as the text needs, like a macOS notification: 280–360 pt.
-    static func width(for content: NoticeContent) -> CGFloat {
-        func width(_ text: String, _ font: NSFont) -> CGFloat {
-            ceil((text as NSString).size(withAttributes: [.font: font]).width)
-        }
-        let top = width(content.title, NoticePillView.titleFont) + 8 + 24 // + "now"
-        var bottom = width(content.detail ?? "", NoticePillView.lineFont)
-        if let category = content.category {
-            bottom += 6 + 10 + width(category, .systemFont(ofSize: 11, weight: .medium))
-        }
-        return min(360, max(280, 12 + 36 + 12 + max(top, bottom) + 14))
-    }
+    /// The habit card's width; shorter, with no buttons.
+    static let size = CGSize(width: ReminderPanelController.liveReminderSize.width, height: 172)
 
     private var panel: ReminderPanel?
     private var hosting: NSHostingView<AnyView>?
@@ -179,7 +97,7 @@ final class NoticePillController {
         hosting?.rootView = AnyView(
             NoticePillView(content: content, onTap: { [weak self] in self?.hide() }).id(content.id)
         )
-        let target = targetFrame(size: CGSize(width: Self.width(for: content), height: Self.height))
+        let target = targetFrame(size: Self.size)
         if !panel.isVisible {
             // Slides down a little as it fades in, like a notification.
             panel.alphaValue = 0
@@ -232,7 +150,7 @@ final class NoticePillController {
 
     private func ensurePanel() -> ReminderPanel {
         if let panel { return panel }
-        let rect = NSRect(x: 0, y: 0, width: 220, height: Self.height)
+        let rect = NSRect(origin: .zero, size: Self.size)
         let newPanel = ReminderPanel(contentRect: rect)
         newPanel.isMovableByWindowBackground = false // a click puts it away; no dragging
         newPanel.hasShadow = true

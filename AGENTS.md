@@ -52,8 +52,8 @@ Sources/RemindMe/
     PersistenceController.swift  ModelContainer
   Panel/
     ReminderPanel.swift          borderless non-activating NSPanel
-    NoticePill.swift             reminders' popup, macOS-notification style (frosted glass, blue bell
-                                 tile, title + "now", schedule + category, run-down line), where the
+    NoticePill.swift             reminders' popup: the habit card's look (theme, animated face, title)
+                                 with no buttons, a short quote (ReminderQuotes) instead; where the
                                  panel's pill goes; stays `ReminderPopupSettings.seconds` (0 = until clicked)
     BreakIsland.swift            the break timer's home, at the camera notch: one look per state (face +
                                  "Working" / "Break" + countdown, or "Break over · Waiting"); work
