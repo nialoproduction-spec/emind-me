@@ -77,21 +77,22 @@ struct GoalNudgeSettings: Codable, Equatable {
 struct ReminderPopupSettings: Codable, Equatable {
     /// How long a reminder's popup stays, in seconds. 0 = until clicked.
     var seconds = 10
-    /// How to send it off early (the small × always works too).
-    var dismiss = Dismiss.doubleClick
+    /// How to send it off early.
+    var dismiss = Dismiss.click
 
     enum Dismiss: String, Codable, CaseIterable {
-        case doubleClick, hover
+        case click, doubleClick, hover
 
         var label: String {
             switch self {
+            case .click: return "Click"
             case .doubleClick: return "Double-click"
             case .hover: return "Rest the pointer on it"
             }
         }
     }
 
-    init(seconds: Int = 10, dismiss: Dismiss = .doubleClick) {
+    init(seconds: Int = 10, dismiss: Dismiss = .click) {
         self.seconds = seconds
         self.dismiss = dismiss
     }
@@ -102,7 +103,7 @@ struct ReminderPopupSettings: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         seconds = try c.decodeIfPresent(Int.self, forKey: .seconds) ?? 10
-        dismiss = try c.decodeIfPresent(Dismiss.self, forKey: .dismiss) ?? .doubleClick
+        dismiss = (try? c.decodeIfPresent(Dismiss.self, forKey: .dismiss)) ?? .click
     }
 
     static let choices = [5, 10, 20, 30, 60, 0]

@@ -53,9 +53,9 @@ Sources/RemindMe/
   Panel/
     ReminderPanel.swift          borderless non-activating NSPanel
     NoticePill.swift             reminders' popup: the habit card's look (theme, a face-kit face, title)
-                                 with no buttons, a short quote (ReminderQuotes) instead;  sent off by its ×,
-                                 a double-click, or a 0.9 s rest of the pointer (`ReminderPopupSettings
-                                 .dismiss`): last words + shake, "Sayonara." / "accepts fate", dissolve
+                                 with no buttons, a short quote (ReminderQuotes) instead;  sent off by a click
+                                 (default), double-click or a 0.9 s rest of the pointer (`ReminderPopupSettings
+                                 .dismiss`); no × button: last words (≈2.5 s to read) + shake, "Sayonara.", dissolve
     BreakIsland.swift            the break timer's home, at the camera notch: solid colours (the pick
                                  shows exactly; glass was tried and dropped). Compact: each side only
                                  as wide as its own content (asymmetric around the notch); between
@@ -76,8 +76,11 @@ Sources/RemindMe/
     EditItemView, ItemHistoryView, WeeklySummaryView, SmartSettingsView, ThemeSettingsView,
     ManageRemindersView, ReminderRowView, ChecklistRowView, CollapsedPillView, EndOfDaySummaryView
   Faces/                         24 traced kaomoji faces, animation, menu bar face; Kaomoji.swift = the
-                                 face kit (34 eyes × 35 mouths × 16 extras = 19,040 faces, 11 moods);
-                                 MenuBarFace wakes near the pointer and its pupils follow it
+                                 cute face kit (22 eyes × 23 mouths × 15 extras = 7,590, 11 moods;
+                                 kaomoji rules: eyes close, tiny mouths, blush/sparkles; no glasses,
+                                 screams, fangs or spirals — the user found those creepy).
+                                 MenuBarFace wakes (^ ^) near the pointer, shiny dot eyes follow it,
+                                 blushes up close
                                  (`look`/`watchImage`, polled 10×/s, 30×/s while awake)
 Tests/RemindMeTests/             XCTest; UIPreviewTests renders PNGs when PREVIEW_DIR is set (CI attaches
                                  them to the release: look at them after any visual change)

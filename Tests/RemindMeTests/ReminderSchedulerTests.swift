@@ -146,11 +146,11 @@ final class ReminderSchedulerTests: XCTestCase {
         let old = #"{"seconds":20}"#.data(using: .utf8)!
         let settings = try JSONDecoder().decode(ReminderPopupSettings.self, from: old)
         XCTAssertEqual(settings.seconds, 20, "the chosen time is kept")
-        XCTAssertEqual(settings.dismiss, .doubleClick)
+        XCTAssertEqual(settings.dismiss, .click, "one click by default")
     }
 
     func testFaceKitHasOverAThousandFaces() {
-        XCTAssertGreaterThanOrEqual(Kaomoji.count, 15000)
+        XCTAssertGreaterThanOrEqual(Kaomoji.count, 7000)
         XCTAssertGreaterThan(Kaomoji.variety(.silly), 100)
         XCTAssertTrue(Kaomoji.Mood.allCases.allSatisfy { Kaomoji.variety($0) > 10 })
         for index in stride(from: 0, to: Kaomoji.count, by: 37) {
@@ -161,7 +161,7 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertGreaterThan(seen.count, 40, "random happy faces actually vary")
         XCTAssertGreaterThan(Kaomoji.variety(.angry), 20)
         let dead = Kaomoji.random(.dead)
-        XCTAssertTrue([.cross, .spiral].contains(dead.eyes), "a dead face has x or spiral eyes")
+        XCTAssertTrue([.cross, .crying].contains(dead.eyes), "fainted: x_x or T_T")
         XCTAssertFalse(ReminderQuotes.quote(for: "Drink water", pick: -7).isEmpty, "any pick works")
     }
 

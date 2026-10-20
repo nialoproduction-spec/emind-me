@@ -427,6 +427,14 @@ final class UIPreviewTests: XCTestCase {
             ("down-left", CGVector(dx: -0.7, dy: 0.7), false, false),
             ("blink", .zero, true, false),
         ]
+        let shy = VStack(spacing: 4) {
+            Image(nsImage: MenuBarFace.watchImage(look: CGVector(dx: 0.3, dy: 0.5), blink: false, wow: false, shy: true))
+                .renderingMode(.template)
+                .resizable()
+                .frame(width: 38 * 3, height: 20 * 3)
+                .foregroundStyle(.white)
+            Text("shy (close)").font(.caption).foregroundStyle(.white.opacity(0.6))
+        }
         let row = HStack(spacing: 14) {
             ForEach(looks, id: \.0) { name, look, blink, wow in
                 VStack(spacing: 4) {
@@ -438,6 +446,7 @@ final class UIPreviewTests: XCTestCase {
                     Text(name).font(.caption).foregroundStyle(.white.opacity(0.6))
                 }
             }
+            shy
         }
         .padding(16)
         .background(Color.black)
@@ -512,9 +521,6 @@ final class UIPreviewTests: XCTestCase {
                     Text("Sayonara.")
                         .font(.system(size: theme.fontSize - 2, weight: .semibold).italic())
                         .foregroundStyle(theme.text.opacity(0.9))
-                    Text("accepts fate")
-                        .font(.system(size: theme.fontSize - 3).italic())
-                        .foregroundStyle(theme.text.opacity(0.5))
                 }
                 .padding(.top, 10)
                 .frame(maxHeight: .infinity, alignment: .top)
@@ -536,7 +542,7 @@ final class UIPreviewTests: XCTestCase {
         var rng = SystemRandomNumberGenerator()
         let moods: [(String, Kaomoji.Mood)] = [("happy", .happy), ("calm", .calm), ("love", .love),
                                                 ("shocked", .shocked), ("sad", .sad), ("angry", .angry),
-                                                ("dead", .dead), ("cool", .cool), ("silly", .silly),
+                                                ("dead", .dead), ("shy", .shy), ("silly", .silly),
                                                 ("pleading", .pleading), ("nervous", .nervous)]
         let sheet = VStack(alignment: .leading, spacing: 10) {
             Text("Eyes").foregroundStyle(.white)

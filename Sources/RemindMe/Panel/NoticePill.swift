@@ -30,12 +30,11 @@ final class PopupLife: ObservableObject {
     @Published var dying = false
 }
 
-/// A reminder's popup: the habit card's look (the panel's theme), a lively
-/// face from the face kit, the title and a short quote, no buttons except a
-/// small ×. Send it off with the ×, a double-click, or (if chosen in
-/// Settings) by resting the pointer on it, and it goes dramatically: shocked
-/// face and last words, a shake, then "Sayonara.", it accepts its fate with
-/// a peaceful little face, and dissolves into nothing.
+/// A reminder's popup: the habit card's look (the panel's theme), a cute
+/// face from the face kit, the title and a short quote, no buttons. Send it
+/// off with a click (or a double-click, or by resting the pointer on it, as
+/// chosen in Settings) and it goes dramatically: last words with a shake,
+/// then "Sayonara." with a peaceful face, then it dissolves into nothing.
 struct NoticePillView: View {
     let content: NoticeContent
     @ObservedObject var life: PopupLife
@@ -45,11 +44,9 @@ struct NoticePillView: View {
 
     @ObservedObject private var themeStore = ThemeStore.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var face = Kaomoji.random([.happy, .happy, .love, .calm, .shocked, .silly, .cool, .pleading, .nervous].randomElement()!)
+    @State private var face = Kaomoji.random([.happy, .happy, .love, .calm, .shy, .silly, .pleading, .shocked, .nervous].randomElement()!)
     @State private var lastWords: String?
-    /// Second line while it goes ("accepts fate").
-    @State private var aside: String?
-    @State private var closeHovered = false
+    @ObservedObject private var popupSettings = AppSettings.reminderPopup
     @State private var shake: Double = 0
     @State private var dissolve: CGFloat = 0
     @State private var bits = DissolveBit.burst(count: 46)
@@ -80,12 +77,7 @@ struct NoticePillView: View {
                         .id(line)
                         .transition(.opacity)
                 }
-                if let aside {
-                    Text(aside)
-                        .font(.system(size: max(theme.fontSize - 3, 9.5)).italic())
-                        .foregroundStyle(theme.text.opacity(0.5))
-                        .transition(.opacity)
-                }
+
             }
             .padding(.horizontal, 16)
             .padding(.top, 10)
@@ -96,7 +88,6 @@ struct NoticePillView: View {
                     .overlay(shape.strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
             )
             .clipShape(shape)
-            .overlay(alignment: .topTrailing) { closeButton(theme) }
             .rotationEffect(.degrees(shake))
             .scaleEffect(1 - 0.12 * dissolve)
             .blur(radius: 8 * dissolve)
@@ -108,38 +99,22 @@ struct NoticePillView: View {
                 .allowsHitTesting(false)
         }
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            if AppSettings.reminderPopup.value.dismiss == .doubleClick { life.dying = true }
+        .onTapGesture(count: popupSettings.value.dismiss == .doubleClick ? 2 : 1) {
+            if popupSettings.value.dismiss != .hover { life.dying = true }
         }
         .onChange(of: life.dying) {
             if life.dying { Task { await die() } }
         }
     }
 
-    /// The small × in the corner: always there, brighter under the pointer.
-    private func closeButton(_ theme: PanelTheme) -> some View {
-        Button { life.dying = true } label: {
-            Image(systemName: "xmark")
-                .font(.system(size: 8.5, weight: .bold))
-                .frame(width: 18, height: 18)
-                .foregroundStyle(theme.text.opacity(closeHovered ? 0.9 : 0.45))
-                .background(Circle().fill(theme.text.opacity(closeHovered ? 0.18 : 0.08)))
-        }
-        .buttonStyle(.plain)
-        .onHover { closeHovered = $0 }
-        .padding(8)
-        .opacity(lastWords == nil ? 1 : 0)
-        .help("Send it off")
-    }
-
-    /// Shock and last words, a shake; "Sayonara.", a peaceful face as it
-    /// accepts its fate; then it dissolves into nothing.
+    /// Last words (long enough to read) with a shake, then "Sayonara." with
+    /// a peaceful face, then it dissolves into nothing.
     @MainActor private func die() async {
         guard lastWords == nil else { return }
-        face = Kaomoji.random([.shocked, .sad, .dead].randomElement()!)
-        withAnimation(.easeOut(duration: 0.15)) { lastWords = ReminderQuotes.lastWords.randomElement() }
+        face = Kaomoji.random([.shocked, .sad, .dead, .pleading].randomElement()!)
+        withAnimation(.easeOut(duration: 0.2)) { lastWords = ReminderQuotes.lastWords.randomElement() }
         guard !reduceMotion else {
-            try? await Task.sleep(for: .milliseconds(900))
+            try? await Task.sleep(for: .milliseconds(2200))
             onDied()
             return
         }
@@ -147,15 +122,11 @@ struct NoticePillView: View {
             withAnimation(.easeInOut(duration: 0.06)) { shake = angle }
             try? await Task.sleep(for: .milliseconds(60))
         }
-        try? await Task.sleep(for: .milliseconds(650))
+        try? await Task.sleep(for: .milliseconds(2000)) // time to read it
 
-        // Acceptance.
         face = Kaomoji(eyes: .content, mouth: .smile, extra: [.tears, .none, .sparkles].randomElement()!)
-        withAnimation(.easeInOut(duration: 0.3)) {
-            lastWords = "Sayonara."
-            aside = "accepts fate"
-        }
-        try? await Task.sleep(for: .milliseconds(1100))
+        withAnimation(.easeInOut(duration: 0.35)) { lastWords = "Sayonara." }
+        try? await Task.sleep(for: .milliseconds(1500))
 
         withAnimation(.easeIn(duration: 1.1)) { dissolve = 1 }
         try? await Task.sleep(for: .milliseconds(1150))

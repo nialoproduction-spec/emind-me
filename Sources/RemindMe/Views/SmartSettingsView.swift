@@ -74,12 +74,12 @@ struct SmartSettingsView: View {
             }
             .controlSize(.small)
         }
-        Picker("Send off early with", selection: $reminderPopup.value.dismiss) {
+        Picker("Send off with", selection: $reminderPopup.value.dismiss) {
             ForEach(ReminderPopupSettings.Dismiss.allCases, id: \.self) { Text($0.label).tag($0) }
         }
         .pickerStyle(.menu)
         .fixedSize()
-        Text("For reminders (no buttons). The small × in its corner always works too.")
+        Text("For reminders (no buttons). It says its last words, then \"Sayonara.\", and dissolves.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)

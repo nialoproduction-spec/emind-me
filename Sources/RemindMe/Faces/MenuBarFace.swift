@@ -57,9 +57,10 @@ enum HoverReaction: String, CaseIterable {
 
 /// Draws and animates the menu bar icon:
 /// - idle: the —ω— logo, unchanged (it's the sleepy face);
-/// - pointer comes near: it wakes up ("wow!", eyebrows up), opens its eyes
-///   and watches the pointer wherever it goes, blinking now and then; falls
-///   back asleep a moment after the pointer leaves;
+/// - pointer comes near: it wakes up happy (^ ^), then its little shiny
+///   eyes follow the pointer wherever it goes, blinking now and then, and
+///   it blushes when the pointer is right next to it; falls back asleep a
+///   moment after the pointer leaves;
 /// - pointer over it: wakes up with a random reaction, then back to the logo
 ///   once the pointer leaves;
 /// - a reminder waiting for an answer: shows that reminder's mood face
@@ -166,11 +167,13 @@ final class MenuBarFace {
     private func drawWatching(dx: CGFloat, dy: CGFloat, now: Date) {
         let awake = now.timeIntervalSince(wokeAt)
         let look = Self.look(dx: dx, dy: dy)
-        let wow = awake < 0.7
+        let wow = awake < 0.6
         // A quick blink every ~4 seconds.
         let blink = !wow && awake.truncatingRemainder(dividingBy: 4.1) > 3.97
-        show(key: "watch|\(Int(look.dx * 8))|\(Int(look.dy * 8))|\(blink)|\(wow)",
-             image: Self.watchImage(look: look, blink: blink, wow: wow))
+        // Right next to it: it gets shy and blushes.
+        let shy = !wow && hypot(dx, dy) < 45
+        show(key: "watch|\(Int(look.dx * 8))|\(Int(look.dy * 8))|\(blink)|\(wow)|\(shy)",
+             image: Self.watchImage(look: look, blink: blink, wow: wow, shy: shy))
     }
 
     /// Where the pupils point: toward the pointer (screen y is up, the image
@@ -182,51 +185,74 @@ final class MenuBarFace {
         return CGVector(dx: dx / distance * strength, dy: -dy / distance * strength)
     }
 
-    /// The awake face for the menu bar: two round eyes whose pupils point
-    /// along `look` (each axis -1…1), a little ω mouth; "wow" right after
-    /// waking: eyebrows up and an O mouth. Blinking: closed eyes.
-    nonisolated static func watchImage(look: CGVector, blink: Bool, wow: Bool) -> NSImage {
+    /// The awake face for the menu bar, kaomoji-cute (•ω•): two small round
+    /// eyes with a shine that glance toward the pointer (`look`, each axis
+    /// -1…1), a tiny ω mouth. Just woken (`wow`): happy ^ ^ eyes and an open
+    /// little mouth. Blinking: closed ◡ eyes. Pointer very close (`shy`):
+    /// it blushes and smiles.
+    nonisolated static func watchImage(look: CGVector, blink: Bool, wow: Bool, shy: Bool = false) -> NSImage {
         template { ctx, _ in
             ctx.setStrokeColor(NSColor.black.cgColor)
             ctx.setFillColor(NSColor.black.cgColor)
             ctx.setLineCap(.round)
             ctx.setLineJoin(.round)
-            let eyes = [CGPoint(x: 11.5, y: 9.5), CGPoint(x: 26.5, y: 9.5)]
-            let radius: CGFloat = 5.2
+            let shift = CGPoint(x: look.dx * 1.7, y: look.dy * 1.2)
+            let eyes = [CGPoint(x: 13 + shift.x, y: 9.5 + shift.y), CGPoint(x: 25 + shift.x, y: 9.5 + shift.y)]
             for eye in eyes {
-                if blink {
-                    ctx.setLineWidth(1.7)
-                    ctx.move(to: CGPoint(x: eye.x - 5, y: eye.y + 0.5))
-                    ctx.addLine(to: CGPoint(x: eye.x + 5, y: eye.y + 0.5))
-                    ctx.strokePath()
-                    continue
-                }
-                ctx.setLineWidth(1.5)
-                ctx.strokeEllipse(in: CGRect(x: eye.x - radius, y: eye.y - radius, width: radius * 2, height: radius * 2))
-                let reach: CGFloat = 2.5
-                let pupil = CGPoint(x: eye.x + look.dx * reach, y: eye.y + look.dy * reach)
-                let r: CGFloat = wow ? 1.9 : 2.4
-                ctx.fillEllipse(in: CGRect(x: pupil.x - r, y: pupil.y - r, width: r * 2, height: r * 2))
                 if wow {
-                    ctx.setLineWidth(1.3)
-                    ctx.move(to: CGPoint(x: eye.x - 4, y: 2.2))
-                    ctx.addQuadCurve(to: CGPoint(x: eye.x + 4, y: 2.2), control: CGPoint(x: eye.x, y: -0.6))
+                    // ^ ^
+                    ctx.setLineWidth(1.6)
+                    ctx.move(to: CGPoint(x: eye.x - 3, y: eye.y + 1.5))
+                    ctx.addQuadCurve(to: CGPoint(x: eye.x + 3, y: eye.y + 1.5), control: CGPoint(x: eye.x, y: eye.y - 3.5))
+                    ctx.strokePath()
+                } else if blink {
+                    // ◡ ◡
+                    ctx.setLineWidth(1.6)
+                    ctx.move(to: CGPoint(x: eye.x - 3, y: eye.y - 0.5))
+                    ctx.addQuadCurve(to: CGPoint(x: eye.x + 3, y: eye.y - 0.5), control: CGPoint(x: eye.x, y: eye.y + 3))
+                    ctx.strokePath()
+                } else {
+                    let r: CGFloat = 3.3
+                    ctx.setBlendMode(.normal)
+                    ctx.fillEllipse(in: CGRect(x: eye.x - r, y: eye.y - r, width: r * 2, height: r * 2))
+                    // The shine, cut out of the eye.
+                    ctx.setBlendMode(.clear)
+                    let shine = CGPoint(x: eye.x + 1.1 - look.dx * 0.5, y: eye.y - 1.2)
+                    ctx.fillEllipse(in: CGRect(x: shine.x - 1.05, y: shine.y - 1.05, width: 2.1, height: 2.1))
+                    ctx.setBlendMode(.normal)
+                }
+                if shy {
+                    // Blush: two little strokes under each eye.
+                    ctx.setLineWidth(0.9)
+                    for dx: CGFloat in [-1.8, 0.6] {
+                        ctx.move(to: CGPoint(x: eye.x + dx - 0.7, y: 16.2))
+                        ctx.addLine(to: CGPoint(x: eye.x + dx + 0.9, y: 14.2))
+                    }
                     ctx.strokePath()
                 }
             }
-            ctx.setLineWidth(1.3)
+            let mouth = CGPoint(x: 19 + shift.x * 0.6, y: 14.6 + shift.y * 0.5)
+            ctx.setLineWidth(1.25)
             if wow {
-                ctx.strokeEllipse(in: CGRect(x: 17.4, y: 13.6, width: 3.2, height: 4))
+                // A little open ▽.
+                ctx.move(to: CGPoint(x: mouth.x - 1.8, y: mouth.y - 0.4))
+                ctx.addLine(to: CGPoint(x: mouth.x + 1.8, y: mouth.y - 0.4))
+                ctx.addLine(to: CGPoint(x: mouth.x, y: mouth.y + 2))
+                ctx.closePath()
+                ctx.fillPath()
+            } else if shy {
+                ctx.move(to: CGPoint(x: mouth.x - 2, y: mouth.y))
+                ctx.addQuadCurve(to: CGPoint(x: mouth.x + 2, y: mouth.y), control: CGPoint(x: mouth.x, y: mouth.y + 2.6))
+                ctx.strokePath()
             } else {
-                ctx.move(to: CGPoint(x: 15.6, y: 15))
-                ctx.addQuadCurve(to: CGPoint(x: 19, y: 15.6), control: CGPoint(x: 17.3, y: 18.2))
-                ctx.addQuadCurve(to: CGPoint(x: 22.4, y: 15), control: CGPoint(x: 20.7, y: 18.2))
+                // ω
+                ctx.move(to: CGPoint(x: mouth.x - 2.6, y: mouth.y))
+                ctx.addQuadCurve(to: CGPoint(x: mouth.x, y: mouth.y + 0.3), control: CGPoint(x: mouth.x - 1.3, y: mouth.y + 2.4))
+                ctx.addQuadCurve(to: CGPoint(x: mouth.x + 2.6, y: mouth.y), control: CGPoint(x: mouth.x + 1.3, y: mouth.y + 2.4))
                 ctx.strokePath()
             }
         }
     }
-
-    // MARK: - Events
 
     private func pointerEntered() {
         pointerInside = true
