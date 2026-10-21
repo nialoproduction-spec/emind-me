@@ -103,8 +103,10 @@ final class DeletionTests: XCTestCase {
         XCTAssertEqual(file.items.count, 2)
         XCTAssertEqual(file.occurrences.count, 3)
 
-        let fresh = try ModelContainer(for: Item.self, Occurrence.self,
-                                       configurations: ModelConfiguration(isStoredInMemoryOnly: true)).mainContext
+        // Keep the container: a context doesn't keep its container alive.
+        let freshContainer = try ModelContainer(for: Item.self, Occurrence.self,
+                                                configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let fresh = freshContainer.mainContext
         let first = Backup.restore(file, into: fresh)
         XCTAssertEqual(first.items, 2)
         XCTAssertEqual(first.entries, 3)
