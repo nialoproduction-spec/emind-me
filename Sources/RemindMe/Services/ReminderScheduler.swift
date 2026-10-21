@@ -186,6 +186,14 @@ final class ReminderScheduler: ObservableObject {
         tickTimer = timer
     }
 
+    /// Restarts the tick timer if it has stopped. Returns true when it had to.
+    @discardableResult
+    func ensureTickRunning() -> Bool {
+        guard tickTimer?.isValid != true else { return false }
+        scheduleTimer()
+        return true
+    }
+
     // MARK: - Tick
 
     func tick() {

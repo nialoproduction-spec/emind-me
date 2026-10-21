@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ReminderPanelController.shared.configure(modelContainer: modelContainer)
             NotificationService.shared.requestAuthorizationIfNeeded()
             ReminderScheduler.shared.start(modelContext: modelContainer.mainContext)
+            HealthMonitor.shared.start(modelContext: modelContainer.mainContext)
             GlobalHotkeys.shared.start()
             VoiceHold.shared.start()
             BreakCycleManager.shared.activate()
