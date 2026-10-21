@@ -375,4 +375,79 @@ enum AppSettings {
     static let face = PersistedSettings(key: "faceSettings.v1", default: FaceSettings())
     static let smart = PersistedSettings(key: "smartSettings.v1", default: SmartSettings())
     static let categories = PersistedSettings(key: "categorySettings.v1", default: CategorySettings())
+    static let missed = PersistedSettings(key: "missed.v1", default: MissedList())
+    static let ignored = PersistedSettings(key: "ignoredCounts.v1", default: IgnoreCounts())
+    static let login = PersistedSettings(key: "loginItem.v1", default: LoginSettings())
+    static let renderWatch = PersistedSettings(key: "renderWatch.v1", default: RenderWatchSettings())
 }
+
+// MARK: - Missed while away
+
+/// Reminders that came due while the Mac was asleep or off, or while you
+/// were away: shown together when you're back ("You missed: Msg wife, 6 PM").
+struct MissedList: Codable, Equatable {
+    struct Entry: Codable, Equatable, Identifiable {
+        var id = UUID()
+        var title: String
+        /// When it was first due.
+        var dueAt: Date
+        /// How many times it came due meanwhile (an every-40-minutes one).
+        var count = 1
+        /// A line under it: "Due in 3 days", a render's file name.
+        var detail: String? = nil
+    }
+
+    var entries: [Entry] = []
+
+    var isEmpty: Bool { entries.isEmpty }
+
+    /// Adds one; the same title again just counts up (and keeps the first time).
+    mutating func add(title: String, dueAt: Date, count: Int = 1, detail: String? = nil) {
+        if let index = entries.firstIndex(where: { $0.title == title && $0.detail == detail }) {
+            entries[index].count += max(count, 1)
+            entries[index].dueAt = min(entries[index].dueAt, dueAt)
+        } else {
+            entries.append(Entry(title: title, dueAt: dueAt, count: max(count, 1), detail: detail))
+        }
+        entries.sort { $0.dueAt < $1.dueAt }
+        if entries.count > 50 { entries.removeFirst(entries.count - 50) }
+    }
+}
+
+// MARK: - Ignored reminders
+
+/// How many times in a row each reminder was ignored (its popup timed out
+/// while you were busy at the Mac; a habit left unfinished). From
+/// `loudAfter` on it comes back louder: angry, buzzing, and it stays until
+/// clicked. Answering it resets the count.
+struct IgnoreCounts: Codable, Equatable {
+    var counts: [String: Int] = [:]
+
+    static let loudAfter = 3
+
+    func count(for id: UUID) -> Int { counts[id.uuidString] ?? 0 }
+    func isLoud(_ id: UUID) -> Bool { count(for: id) >= Self.loudAfter }
+
+    mutating func ignored(_ id: UUID) { counts[id.uuidString, default: 0] += 1 }
+    mutating func answered(_ id: UUID) { counts[id.uuidString] = nil }
+}
+
+// MARK: - Open at login
+
+struct LoginSettings: Codable, Equatable {
+    /// Open Remind Me when the Mac starts, so reminders fire after a restart.
+    var openAtLogin = true
+    /// Turned on once already (so turning it off in System Settings sticks).
+    var registeredOnce = false
+}
+
+// MARK: - Render done ping
+
+/// Watches the folders you render into; when a new video file there stops
+/// growing while DaVinci Resolve is open, it says "Render done".
+struct RenderWatchSettings: Codable, Equatable {
+    var isEnabled = false
+    /// Folders to watch (and everything inside them).
+    var folders: [String] = []
+}
+

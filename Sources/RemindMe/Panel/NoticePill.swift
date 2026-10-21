@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// What one popup says. Everything is plain data so tests can check it
@@ -23,6 +24,13 @@ struct NoticeContent: Equatable {
     var duration: TimeInterval = 6
     /// The countdown in plain seconds ("10", "9" … "0"), for the last ones.
     var secondsOnly = false
+    /// The reminder it's for, so ignoring it (or not) can be counted.
+    var itemID: UUID? = nil
+    /// Ignored again and again: angry from the start, red edge, a buzz, and
+    /// it stays until clicked.
+    var loud = false
+    /// The face's mood while it waits (a finished render is happy).
+    var mood: FaceMood? = nil
     var id = UUID()
 }
 
@@ -80,11 +88,12 @@ struct NoticePillView: View {
         _stage = State(initialValue: stage)
     }
 
-    /// The original faces' moods: cute while it waits, crying when sent
-    /// off, at peace for "Sayonara.", angry all the way out when ignored.
-    static func mood(for stage: Stage) -> FaceMood {
+    /// The original faces' moods: cute while it waits (angry when it's
+    /// loud), crying when sent off, at peace for "Sayonara.", angry all the
+    /// way out when ignored.
+    static func mood(for stage: Stage, loud: Bool = false, waiting: FaceMood? = nil) -> FaceMood {
         switch stage {
-        case .alive: return .gentle
+        case .alive: return loud ? .urgent : (waiting ?? .gentle)
         case .parting(.dismissed, _): return .skipped
         case .sayonara(.dismissed): return .snoozed
         case .parting(.ignored, _), .sayonara(.ignored): return .urgent
@@ -109,10 +118,11 @@ struct NoticePillView: View {
     var body: some View {
         let theme = themeStore.theme
         let shape = RoundedRectangle(cornerRadius: theme.cornerRadius, style: .continuous)
-        let quiet = stage == .alive
+        let quiet = stage == .alive && !content.loud
+        let angry = ignored || content.loud
         ZStack {
             VStack(spacing: 6) {
-                AnimatedFaceView(mood: Self.mood(for: stage), color: theme.text)
+                AnimatedFaceView(mood: Self.mood(for: stage, loud: content.loud, waiting: content.mood), color: theme.text)
 
                 Text(content.title)
                     .font(theme.titleFont)
@@ -142,8 +152,8 @@ struct NoticePillView: View {
                 shape.fill(theme.background.opacity(theme.backgroundOpacity))
                     .overlay(shape.strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
                     // Ignored: an angry red edge.
-                    .overlay(shape.strokeBorder(Color.red.opacity(ignored ? 0.75 : 0), lineWidth: 2))
-                    .animation(.easeOut(duration: 0.2), value: ignored)
+                    .overlay(shape.strokeBorder(Color.red.opacity(angry ? 0.75 : 0), lineWidth: content.loud ? 3 : 2))
+                    .animation(.easeOut(duration: 0.2), value: angry)
             )
             .clipShape(shape)
             .rotationEffect(.degrees(shake))
@@ -256,6 +266,11 @@ final class NoticePillController {
     private var hoverTask: Task<Void, Never>?
     private var generation = 0
     private var life = PopupLife()
+    private var exitWatch: AnyCancellable?
+
+    /// A reminder's popup went: ignored (true) or sent off (false). Faded
+    /// while you were away isn't reported. Set by the scheduler.
+    var onOutcome: ((UUID, Bool) -> Void)?
 
     private init() {}
 
@@ -266,6 +281,12 @@ final class NoticePillController {
         let life = PopupLife()
         self.life = life
         let shownGeneration = generation
+        exitWatch = nil
+        if let itemID = content.itemID {
+            exitWatch = life.$exit.compactMap { $0 }.first().sink { [weak self] exit in
+                self?.onOutcome?(itemID, exit == .ignored)
+            }
+        }
         hosting?.rootView = AnyView(
             NoticePillView(content: content, life: life,
                            onDied: { [weak self] in self?.vanish(ifGeneration: shownGeneration) })
@@ -289,6 +310,12 @@ final class NoticePillController {
         }
 
         watchForHover(life: life, generation: shownGeneration)
+        if content.loud {
+            Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(350)) // after it has slid in
+                await self?.buzz(generation: shownGeneration)
+            }
+        }
 
         if !content.sticky {
             let seconds = content.duration

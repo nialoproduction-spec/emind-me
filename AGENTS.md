@@ -39,7 +39,14 @@ Sources/RemindMe/
                                  away hold, end-of-day + weekly summary triggers, shortcuts
     ItemActions.swift            pause / resume / edit / apply suggestion; OccurrenceActions (checklist)
     GoalCheckIn.swift            goal answers per day (Done / Not today), unanswered goals
-    ItemDeletion.swift           the ONLY way to delete an Item (removes its occurrences too)
+    ItemDeletion.swift           the ONLY way to delete an Item (removes its occurrences too); records an undo
+    UndoCenter.swift             the last delete / Done / Skip, undoable for 10 min (⌘Z in the panel, Undo bar,
+                                 menu bar right-click)
+    Backup.swift                 one JSON file of all items + occurrences; restore only adds what's missing (by id);
+                                 daily auto-backup in Application Support/Remind Me/Backups, last 7 kept
+    LoginItem.swift              open at login (SMAppService), on at the first launch, then follows the switch
+    RenderWatcher.swift          "Render done" ping: FSEvents on chosen folders; RenderTracker (pure, tested) says
+                                 when a new video stopped growing; only while DaVinci Resolve is running
     StoreRepair.swift            raw SQLite clean-up of orphaned rows, runs before SwiftData opens
     Insights.swift               history, streaks, weekly summary, smart suggestions (pure functions)
     AwayDetector.swift           idle time → "away" (no permissions needed)
@@ -85,7 +92,10 @@ Sources/RemindMe/
     PanelRootView.swift          picks the layer: live reminder > end of day > weekly > list > pill
     ExpandedPanelView.swift      the list (Goals → Reminders → Today), swipe/context actions,
                                  inner pages (Edit, History, Weekly), add field, suggestions
-    LiveReminderView.swift       the pop-up card: face, Done / Snooze (lengths) / Skip
+    LiveReminderView.swift       the pop-up card: face, Done / Snooze (lengths) / Skip; loud (angry + red edge)
+                                 once ignored 3 times in a row
+    MissedView.swift             "You missed" overlay: what came due while away / asleep / off
+    HabitCalendarView.swift      month grid of done / some / missed / skipped days (on the History page)
     EditItemView, ItemHistoryView, WeeklySummaryView, SmartSettingsView, ThemeSettingsView,
     ManageRemindersView, ReminderRowView, ChecklistRowView, CollapsedPillView, EndOfDaySummaryView
   Faces/                         the 24 traced faces (the user's originals, "OG"), animation, menu bar
@@ -155,6 +165,17 @@ Design/, scripts/trace_faces.py  source art + the tracer that generated Faces/Fa
   (Habit also ⌘↩). No preview bar pops up while typing. "remind me to" and typos of "every" / units are
   cleaned up by the parser first. A clock time works with or without "at" ("at 6pm", "every 6pm" =
   daily, "6:30 pm", "9.15am", "21:00"; `bareClockTime` needs am/pm or a colon so plain numbers don't count).
+- Dated schedules are `.scheduledRoutine` plus optional fields (older stores open with them nil = daily/weekly):
+  `onceAt` (one-time: "tomorrow 3pm", "Nov 5 at 10am", "in 2 hours"; after it fires `endedAt` is set and it
+  leaves the lists), `monthDay` (+ `yearMonth` = yearly; "pay rent on the 1st", "anniversary every Mar 12",
+  birthdays), `dueDate` (deadline, "X due Nov 10": popup nudges 7, 3, 1 day before and on the day at 10 AM,
+  a "Deadlines" section, right-click "Delivered"; over after its day). `Item.repeatKind` says which. A date with
+  no time and no "remind me" stays a goal's target date. `ItemParser.parse(_:now:calendar:)` for tests.
+- Missed: a quiet reminder that fires late (> 2 min, Mac asleep / off) or while away / full screen isn't popped
+  up; it goes on `AppSettings.missed`, shown as the "You missed" overlay once you're back.
+- Ignored: a popup that timed out while you were busy, or a habit left unfinished, counts up
+  (`AppSettings.ignored`); from 3 in a row it comes back loud (angry, red edge, buzz, stays until clicked).
+  Answering resets it.
 - Rows show "N total" and "N days in a row". A habit card has three buttons only: Done, Snooze
   (shortest length; right-click for the others), Skip.
 - All sounds are off. Don't add any.

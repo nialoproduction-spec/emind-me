@@ -145,6 +145,7 @@ enum ItemActions {
             item.minute = nil
             item.weekdaysRaw = nil
             item.targetDate = nil
+            clearDates(of: item)
         case .scheduledRoutine:
             item.intervalSeconds = nil
             item.hour = edit.hour
@@ -152,6 +153,12 @@ enum ItemActions {
             let days = Array(Set(edit.weekdays)).sorted()
             item.weekdaysRaw = (days.isEmpty || days.count == 7) ? nil : days
             item.targetDate = nil
+            // One-time / monthly / yearly / deadline keep their date; a
+            // one-time reminder moves to the new time on its day.
+            if let once = item.onceAt, let hour = edit.hour, let minute = edit.minute {
+                item.onceAt = Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: once) ?? once
+            }
+            if item.repeatKind != .daily, item.repeatKind != .weekly { item.weekdaysRaw = nil }
         case .goal:
             item.intervalSeconds = nil
             item.hour = nil
@@ -159,6 +166,7 @@ enum ItemActions {
             item.weekdaysRaw = nil
             item.targetDate = edit.targetDate
             item.nextFireDate = nil
+            clearDates(of: item)
         }
 
         if scheduleChanged { item.scheduleEditedAt = now }
@@ -167,6 +175,24 @@ enum ItemActions {
         }
         // Title changes show in the notification text too, so always refresh.
         (reschedule ?? { NotificationService.shared.schedule(for: $0) })(item)
+    }
+
+    /// Back to a plain schedule (or a goal): no one-time / monthly / yearly
+    /// date or deadline any more.
+    private static func clearDates(of item: Item) {
+        item.onceAt = nil
+        item.monthDay = nil
+        item.yearMonth = nil
+        item.dueDate = nil
+        item.endedAt = nil
+    }
+
+    /// A deadline delivered, or a one-time reminder put away: it's over and
+    /// leaves the lists.
+    static func finish(_ item: Item, now: Date = .now, cancelNotifications: ((Item) -> Void)? = nil) {
+        item.endedAt = now
+        item.nextFireDate = nil
+        (cancelNotifications ?? { NotificationService.shared.cancel(for: $0) })(item)
     }
 
     // MARK: - Suggestions
@@ -192,6 +218,28 @@ enum ItemActions {
 /// Ticking things off (or un-ticking them) in today's checklist.
 @MainActor
 enum OccurrenceActions {
+    /// An entry's answer as it was, to put back on undo.
+    struct Snapshot {
+        let status: OccurrenceStatus
+        let resolvedAt: Date?
+        let nextEscalationAt: Date?
+        let remindersSentCount: Int
+
+        init(_ occurrence: Occurrence) {
+            status = occurrence.status
+            resolvedAt = occurrence.resolvedAt
+            nextEscalationAt = occurrence.nextEscalationAt
+            remindersSentCount = occurrence.remindersSentCount
+        }
+
+        func restore(_ occurrence: Occurrence) {
+            occurrence.status = status
+            occurrence.resolvedAt = resolvedAt
+            occurrence.nextEscalationAt = nextEscalationAt
+            occurrence.remindersSentCount = remindersSentCount
+        }
+    }
+
     /// Sets a checklist entry's status. If it's the reminder on screen, it's
     /// answered through the scheduler, so the card closes as if a button had
     /// been pressed. "Not done" is recorded as missed (`.unfinished`), which
@@ -208,9 +256,16 @@ enum OccurrenceActions {
             scheduler.resolveActive(as: target)
             return
         }
+        let before = Snapshot(occurrence)
         occurrence.status = target
         occurrence.nextEscalationAt = nil
         occurrence.resolvedAt = target == .unfinished ? nil : now
+        guard target == .done || target == .skipped, before.status != target else { return }
+        let title = occurrence.item?.title ?? "Reminder"
+        scheduler.undo.record((target == .done ? "Done: " : "Skipped: ") + title) {
+            guard !occurrence.isDeleted else { return }
+            before.restore(occurrence)
+        }
     }
 
     /// Tapping a checklist row: done ↔ not done.

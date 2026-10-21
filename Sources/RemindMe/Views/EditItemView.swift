@@ -218,6 +218,32 @@ struct EditItemView: View {
                     .datePickerStyle(.field)
                     .labelsHidden()
             }
+            if item.kind == .scheduledRoutine, item.repeatKind != .daily, item.repeatKind != .weekly {
+                // One-time, monthly, yearly, deadline: the date stays; the time can change.
+                Text(item.scheduleSummary)
+                    .font(.caption)
+                    .foregroundStyle(theme.text.opacity(0.6))
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                weekdayFields
+            }
+        case .goal:
+            Toggle("Target date", isOn: $hasTarget)
+                .foregroundStyle(theme.text)
+            if hasTarget {
+                DatePicker("By", selection: $targetDate, displayedComponents: .date)
+                    .datePickerStyle(.field)
+                    .foregroundStyle(theme.text)
+            }
+            Text("Goals never pop up — they're kept on your list until you tick them off.")
+                .font(.caption)
+                .foregroundStyle(theme.text.opacity(0.5))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private var weekdayFields: some View {
             field("On") {
                 HStack(spacing: 4) {
                     ForEach(orderedWeekdays, id: \.self) { day in
@@ -239,19 +265,6 @@ struct EditItemView: View {
             Text(weekdays.isEmpty || weekdays.count == 7 ? "Every day" : "Only on the highlighted days")
                 .font(.caption)
                 .foregroundStyle(theme.text.opacity(0.5))
-        case .goal:
-            Toggle("Target date", isOn: $hasTarget)
-                .foregroundStyle(theme.text)
-            if hasTarget {
-                DatePicker("By", selection: $targetDate, displayedComponents: .date)
-                    .datePickerStyle(.field)
-                    .foregroundStyle(theme.text)
-            }
-            Text("Goals never pop up — they're kept on your list until you tick them off.")
-                .font(.caption)
-                .foregroundStyle(theme.text.opacity(0.5))
-                .fixedSize(horizontal: false, vertical: true)
-        }
     }
 
     /// Weekdays in the Mac's order (Monday first where that's the custom).

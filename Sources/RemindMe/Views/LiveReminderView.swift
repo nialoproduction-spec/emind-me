@@ -18,6 +18,7 @@ struct LiveReminderView: View {
     @ObservedObject private var escalationStore = EscalationSettingsStore.shared
     @ObservedObject private var snoozeSettings = AppSettings.snooze
     @ObservedObject private var smart = AppSettings.smart
+    @ObservedObject private var ignored = AppSettings.ignored
     @State private var reaction: FaceMood?
     @State private var choosingSnooze: Bool
 
@@ -32,8 +33,15 @@ struct LiveReminderView: View {
         _choosingSnooze = State(initialValue: choosingSnooze)
     }
 
+    /// Left unfinished again and again: it comes back angry from the start.
+    private var loud: Bool {
+        occurrence.item.map { ignored.value.isLoud($0.id) } ?? false
+    }
+
     private var mood: FaceMood {
-        reaction ?? FaceMood.forPop(
+        if let reaction { return reaction }
+        if loud { return .urgent }
+        return FaceMood.forPop(
             count: occurrence.remindersSentCount,
             maxPops: escalationStore.settings.maxReminders
         )
@@ -58,10 +66,17 @@ struct LiveReminderView: View {
                 .lineLimit(2)
                 .frame(maxWidth: .infinity)
 
-            Text("“\(quote)”")
-                .font(.system(size: max(theme.fontSize - 3, 9.5)).italic())
-                .foregroundStyle(theme.text.opacity(0.5))
-                .lineLimit(1)
+            if loud, let id = occurrence.item?.id {
+                Text(ReminderScheduler.loudLine(times: ignored.value.count(for: id)))
+                    .font(.system(size: max(theme.fontSize - 3, 9.5), weight: .semibold).italic())
+                    .foregroundStyle(Color.red.opacity(0.9))
+                    .lineLimit(1)
+            } else {
+                Text("“\(quote)”")
+                    .font(.system(size: max(theme.fontSize - 3, 9.5)).italic())
+                    .foregroundStyle(theme.text.opacity(0.5))
+                    .lineLimit(1)
+            }
 
             Group {
                 if choosingSnooze {
@@ -76,6 +91,11 @@ struct LiveReminderView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(
+            RoundedRectangle(cornerRadius: theme.cornerRadius, style: .continuous)
+                .strokeBorder(Color.red.opacity(loud ? 0.75 : 0), lineWidth: 3)
+                .allowsHitTesting(false)
+        )
         .onChange(of: scheduler.shortcutRequest) {
             guard let request = scheduler.shortcutRequest else { return }
             scheduler.consumeShortcut()

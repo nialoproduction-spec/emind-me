@@ -39,6 +39,7 @@ struct ExpandedPanelView: View {
     @Environment(\.modelContext) private var modelContext
     @ObservedObject private var draft = PanelDraft.shared
     @ObservedObject private var smart = AppSettings.smart
+    @ObservedObject private var undo = UndoCenter.shared
     @FocusState private var fieldFocused: Bool
 
     /// Inner pages, shown in place of the list.
@@ -72,9 +73,17 @@ struct ExpandedPanelView: View {
             .sorted { $0.isAchieved != $1.isAchieved ? !$0.isAchieved : $0.createdAt > $1.createdAt }
     }
 
+    /// Over (a one-time reminder that has fired, a delivered or past
+    /// deadline): gone from the list.
     private func routines(styled style: ReminderStyle) -> [Item] {
-        items.filter { $0.kind != .goal && $0.style == style && matchesFilter($0) }
+        items.filter { $0.kind != .goal && $0.style == style && !$0.isOver && $0.dueDate == nil && matchesFilter($0) }
             .sorted { $0.isActive != $1.isActive ? $0.isActive : $0.createdAt > $1.createdAt }
+    }
+
+    /// Deadlines still ahead, soonest first.
+    private var deadlines: [Item] {
+        items.filter { $0.kind != .goal && $0.dueDate != nil && !$0.isOver && matchesFilter($0) }
+            .sorted { ($0.dueDate ?? .distantFuture) < ($1.dueDate ?? .distantFuture) }
     }
 
     private var habits: [Item] { routines(styled: .habit) }
@@ -184,7 +193,7 @@ struct ExpandedPanelView: View {
             case .item(let item):
                 Text(item.kind == .goal
                      ? "This goal will be removed."
-                     : "This reminder and its history will be removed. This can't be undone.")
+                     : "This reminder and its history will be removed. ⌘Z brings it back.")
             case .entry:
                 Text("Removes this entry from today's list. The reminder itself stays.")
             }
@@ -220,15 +229,63 @@ struct ExpandedPanelView: View {
                 suggestionBar(suggestion)
             }
 
+            if let action = undo.available {
+                Divider().opacity(0.15)
+                undoBar(action)
+            }
+
             Divider().opacity(0.15)
             inputRow
         }
+        // ⌘Z: take back the last delete, Done or Skip.
+        .background(
+            Button("Undo") { undo.undoLast() }
+                .keyboardShortcut("z", modifiers: .command)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        )
+    }
+
+    private func undoBar(_ action: UndoCenter.Action) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.uturn.backward.circle.fill")
+                .foregroundStyle(theme.text.opacity(0.6))
+            Text(action.label)
+                .font(.system(size: theme.fontSize - 1))
+                .foregroundStyle(theme.text.opacity(0.8))
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            Button { undo.undoLast() } label: {
+                Text("Undo ⌘Z")
+                    .font(.system(size: theme.fontSize - 2, weight: .semibold))
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 3)
+                    .background(ReminderRowView.onColor.opacity(0.2))
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(ReminderRowView.onColor)
+            Button { undo.clear() } label: {
+                Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(theme.text.opacity(0.4))
+            .help("Keep it")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
     }
 
     private var list: some View {
         List {
             if categoryFilter == nil {
                 BreakTimerSection(theme: theme)
+            }
+            if !deadlines.isEmpty {
+                Section("Deadlines") {
+                    ForEach(deadlines) { item in itemRow(item) }
+                }
             }
             if !goals.isEmpty {
                 Section("Goals") {
@@ -257,7 +314,7 @@ struct ExpandedPanelView: View {
                     }
                 }
             }
-            if goals.isEmpty && habits.isEmpty && reminders.isEmpty && sortedToday.isEmpty
+            if goals.isEmpty && habits.isEmpty && reminders.isEmpty && deadlines.isEmpty && sortedToday.isEmpty
                 && (categoryFilter != nil || BreakCycleManager.shared.config == nil) {
                 Text("Nothing in this category yet.")
                     .font(theme.font)
@@ -325,7 +382,17 @@ struct ExpandedPanelView: View {
             }
             Button(item.isAchieved ? "Not finished after all" : "Finished for good (stop asking)") { item.isAchieved.toggle() }
             Button("History & streak") { historyOf = item }
+        } else if item.dueDate != nil {
+            Button("Delivered") { ItemActions.finish(item) }
+            if item.isActive {
+                Button("Stop the nudges") { pause(item, for: .indefinitely) }
+            } else {
+                Button("Nudge me again") { ItemActions.resume(item) }
+            }
         } else {
+            if item.onceAt != nil {
+                Button("Done with it") { ItemActions.finish(item) }
+            }
             Button(item.style == .habit ? "Make it a Reminder (no buttons)" : "Make it a Habit (tap Done)") {
                 item.style = item.style == .habit ? .justRemind : .habit
                 NotificationService.shared.schedule(for: item)

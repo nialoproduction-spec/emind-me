@@ -336,6 +336,58 @@ final class UIPreviewTests: XCTestCase {
         try save(sheet, as: "preview-10-history-and-weekly.png")
     }
 
+    /// Deadlines, one-time, monthly and yearly rows; "You missed"; the loud
+    /// popup and the render ping.
+    func testRenderDatesMissedAndLoud() throws {
+        try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
+        let (container, _, _) = try sampleData()
+        let context = container.mainContext
+        let teaser = Item(from: ItemParser.parse("Sharma teaser due Nov 10 #work"))
+        let album = Item(from: ItemParser.parse("Rai wedding album deadline Dec 2"))
+        let once = Item(from: ItemParser.parse("call client tomorrow 3pm"))
+        let rent = Item(from: ItemParser.parse("pay rent on the 1st #home"))
+        let anniversary = Item(from: ItemParser.parse("anniversary every Mar 12"))
+        [teaser, album, once, rent, anniversary].forEach { context.insert($0) }
+        try context.save()
+
+        let rows = panel(width: 340) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("DEADLINES").font(.system(size: 10, weight: .semibold)).foregroundStyle(.gray)
+                ReminderRowView(item: teaser, theme: theme, onToggle: {})
+                ReminderRowView(item: album, theme: theme, onToggle: {})
+                Text("REMINDERS").font(.system(size: 10, weight: .semibold)).foregroundStyle(.gray)
+                ReminderRowView(item: once, theme: theme, onToggle: {})
+                ReminderRowView(item: rent, theme: theme, onToggle: {})
+                ReminderRowView(item: anniversary, theme: theme, onToggle: {})
+            }
+            .padding(14)
+        }
+        let now = Date()
+        let missed = panel(width: 340, height: 330) {
+            MissedView(entries: [
+                MissedList.Entry(title: "Msg wife", dueAt: now.addingTimeInterval(-3 * 3600)),
+                MissedList.Entry(title: "Drink water", dueAt: now.addingTimeInterval(-5 * 3600), count: 7),
+                MissedList.Entry(title: "Sharma teaser", dueAt: now.addingTimeInterval(-2 * 3600),
+                                 detail: "Due in 3 days · Tue, Nov 10"),
+                MissedList.Entry(title: "Render done", dueAt: now.addingTimeInterval(-1800),
+                                 detail: "Sharma_Teaser_v3.mov"),
+            ], theme: theme, now: now)
+        }
+        let size = NoticePillController.size
+        let popups = VStack(spacing: 10) {
+            NoticePillView(content: NoticeContent(title: "Drink water", detail: ReminderScheduler.loudLine(times: 3),
+                                                  sticky: true, loud: true), life: PopupLife())
+                .frame(width: size.width, height: size.height)
+            NoticePillView(content: NoticeContent(title: "Render done", detail: "Sharma_Teaser_v3.mov",
+                                                  duration: 20, mood: .done), life: PopupLife())
+                .frame(width: size.width, height: size.height)
+        }
+        .padding(10)
+        .background(Color(white: 0.5))
+        let sheet = HStack(alignment: .top, spacing: 0) { rows; missed; popups }
+        try save(sheet, as: "preview-15-dates-missed-loud.png")
+    }
+
     func testRenderEditScreen() throws {
         try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
         let (container, items, _) = try sampleData()

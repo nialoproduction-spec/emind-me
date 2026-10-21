@@ -58,6 +58,9 @@ final class ReminderScheduler: ObservableObject {
     @Published var showWeeklySummary = false
     /// Flips true at the goal check-in time: the panel asks Done / Not today.
     @Published var showGoalCheckIn = false
+    /// Flips true when you're back and things came due while you were away
+    /// (or the Mac was asleep or off): "You missed: …".
+    @Published var showMissed = false
     /// A Done / Snooze / Skip pressed on the keyboard; the reminder card
     /// picks it up so it can play its reaction first.
     @Published private(set) var shortcutRequest: ShortcutRequest?
@@ -98,6 +101,15 @@ final class ReminderScheduler: ObservableObject {
     /// Shows a small popup (quiet reminders, the goal check-in).
     private let showNotice: @MainActor (NoticeContent) -> Void
     private let popupSettings: PersistedSettings<ReminderPopupSettings>
+    /// What came due while nobody saw it.
+    let missed: PersistedSettings<MissedList>
+    /// Reminders ignored in a row (they come back louder).
+    let ignored: PersistedSettings<IgnoreCounts>
+    /// Done / Skip can be undone.
+    let undo: UndoCenter
+
+    /// A fire this late (the Mac was asleep or off) goes to the missed list.
+    nonisolated static let lateAfter: TimeInterval = 120
 
     private var escalation: EscalationSettings { escalationSettings() }
 
@@ -112,7 +124,10 @@ final class ReminderScheduler: ObservableObject {
         weeklySettings: PersistedSettings<WeeklySummarySettings>? = nil,
         goalNudgeSettings: PersistedSettings<GoalNudgeSettings>? = nil,
         showNotice: (@MainActor (NoticeContent) -> Void)? = nil,
-        popupSettings: PersistedSettings<ReminderPopupSettings>? = nil
+        popupSettings: PersistedSettings<ReminderPopupSettings>? = nil,
+        missed: PersistedSettings<MissedList>? = nil,
+        ignored: PersistedSettings<IgnoreCounts>? = nil,
+        undo: UndoCenter? = nil
     ) {
         self.presenter = presenter ?? ReminderPanelController.shared
         self.clock = now ?? { Date.now }
@@ -125,11 +140,18 @@ final class ReminderScheduler: ObservableObject {
         self.goalNudgeSettings = goalNudgeSettings ?? AppSettings.goalNudge
         self.showNotice = showNotice ?? { NoticePillController.shared.show($0) }
         self.popupSettings = popupSettings ?? AppSettings.reminderPopup
+        self.missed = missed ?? AppSettings.missed
+        self.ignored = ignored ?? AppSettings.ignored
+        self.undo = undo ?? UndoCenter.shared
     }
 
     func start(modelContext: ModelContext) {
         attach(modelContext: modelContext)
         scheduleTimer()
+        // Popups say whether they were ignored, so repeat offenders get louder.
+        NoticePillController.shared.onOutcome = { [weak self] id, wasIgnored in
+            self?.popupOutcome(itemID: id, ignored: wasIgnored)
+        }
         // Block-based observer: no Objective-C selector, nothing to unregister
         // by hand while the scheduler lives for the whole app session.
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -185,6 +207,14 @@ final class ReminderScheduler: ObservableObject {
             }
         }
 
+        // Deadlines past their day are over.
+        for item in items where item.endedAt == nil {
+            if let due = item.dueDate, Self.deadlineIsPast(due: due, now: now) {
+                item.endedAt = now
+                item.nextFireDate = nil
+            }
+        }
+
         // Timed pauses that have run out resume on their own.
         for item in items where item.kind != .goal {
             if let until = item.pausedUntil, until <= now {
@@ -216,6 +246,7 @@ final class ReminderScheduler: ObservableObject {
             }
         }
 
+        checkMissed(held: suppressed || away)
         checkGoalNudge(now: now, items: items, occurrences: allOccurrences, held: suppressed || away)
         checkEndOfDay(now: now)
         checkWeeklySummary(now: now)
@@ -237,8 +268,29 @@ final class ReminderScheduler: ObservableObject {
             next = item.computeNextFireDate(after: current)
         }
         item.nextFireDate = next
+        // One-time: it has had its moment, so it leaves the list (its card
+        // still waits for an answer).
+        if item.onceAt != nil { item.endedAt = current }
 
         attemptPresent(occurrence, held: held)
+    }
+
+    /// The end of the deadline's day has passed.
+    nonisolated static func deadlineIsPast(due: Date, now: Date, calendar: Calendar = .current) -> Bool {
+        let dayAfter = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: due)) ?? due
+        return now >= dayAfter
+    }
+
+    /// How many times it came due from `dueAt` up to `now` (at least 1):
+    /// an every-40-minutes reminder through a night's sleep came due many times.
+    nonisolated static func dueCount(of item: Item, from dueAt: Date, to now: Date) -> Int {
+        var count = 1
+        var cursor = dueAt
+        while count < 500, let next = item.computeNextFireDate(after: cursor), next <= now {
+            count += 1
+            cursor = next
+        }
+        return count
     }
 
     /// A "just remind" routine came due: a small popup with a face and the
@@ -248,15 +300,72 @@ final class ReminderScheduler: ObservableObject {
     /// this one is simply skipped rather than queued up.
     private func fireQuietReminder(item: Item, dueAt: Date, held: Bool) {
         let current = clock()
+        let count = Self.dueCount(of: item, from: dueAt, to: current)
         var next = item.computeNextFireDate(after: dueAt)
         if let candidate = next, candidate <= current {
             next = item.computeNextFireDate(after: current)
         }
         item.nextFireDate = next
-        guard !held else { return }
-        showNotice(Self.popupContent(title: item.title,
-                                     quote: ReminderQuotes.quote(for: item.title, pick: Int.random(in: 0..<1000)),
-                                     settings: popupSettings.value))
+        if item.onceAt != nil { item.endedAt = current }
+        let detail = item.dueDate.map { Item.deadlineLine(due: $0, now: current) }
+        // Nobody saw it (away, full screen, or it's late because the Mac was
+        // asleep or off): it goes on the "You missed" list for when you're back.
+        let late = current.timeIntervalSince(dueAt) > Self.lateAfter
+        guard !held, !late else {
+            missed.value.add(title: item.title, dueAt: dueAt, count: count, detail: detail)
+            return
+        }
+        var content = Self.popupContent(title: item.title,
+                                        quote: detail ?? ReminderQuotes.quote(for: item.title, pick: Int.random(in: 0..<1000)),
+                                        settings: popupSettings.value)
+        content.itemID = item.id
+        if ignored.value.isLoud(item.id) {
+            // Ignored again and again: it comes back louder and waits for a click.
+            content.loud = true
+            content.sticky = true
+            content.detail = Self.loudLine(times: ignored.value.count(for: item.id))
+        }
+        showNotice(content)
+    }
+
+    nonisolated static func loudLine(times: Int) -> String {
+        "Ignored \(times) times. Look at me!"
+    }
+
+    // MARK: - Missed while away
+
+    /// You're back (or the Mac woke up) and things came due meanwhile:
+    /// the panel lists them, once.
+    private func checkMissed(held: Bool) {
+        guard !showMissed, !held, !missed.value.isEmpty, activeOccurrence == nil,
+              !showGoalCheckIn, !showEndOfDaySummary, !showWeeklySummary else { return }
+        showMissed = true
+        presenter.presentOverlay()
+    }
+
+    func dismissMissed() {
+        missed.value.entries = []
+        guard showMissed else { return }
+        showMissed = false
+        presenter.dismissOverlay()
+    }
+
+    /// Something to put on the list from elsewhere (a render that finished
+    /// while you were away).
+    func noteMissed(title: String, at date: Date, detail: String? = nil) {
+        missed.value.add(title: title, dueAt: date, detail: detail)
+    }
+
+    // MARK: - Ignored reminders
+
+    /// How a reminder's popup went: ignored (timed out while you were busy)
+    /// counts up; sent off (clicked) resets. Faded while you were away: no change.
+    func popupOutcome(itemID: UUID, ignored wasIgnored: Bool) {
+        if wasIgnored {
+            ignored.value.ignored(itemID)
+        } else {
+            ignored.value.answered(itemID)
+        }
     }
 
 
@@ -393,6 +502,8 @@ final class ReminderScheduler: ObservableObject {
     private func finalizeUnfinished(_ occurrence: Occurrence) {
         occurrence.status = .unfinished
         occurrence.nextEscalationAt = nil
+        // Left unanswered through every nag: that's ignoring it.
+        if let id = occurrence.item?.id { ignored.value.ignored(id) }
     }
 
     // MARK: - User actions (from the live reminder's three buttons)
@@ -454,11 +565,30 @@ final class ReminderScheduler: ObservableObject {
 
     private func resolve(status: OccurrenceStatus) {
         guard let occurrence = activeOccurrence else { return }
+        let before = OccurrenceActions.Snapshot(occurrence)
         occurrence.status = status
         occurrence.resolvedAt = clock()
         occurrence.nextEscalationAt = nil
+        if let id = occurrence.item?.id { ignored.value.answered(id) }
         try? modelContext?.save()
         closeLiveReminder()
+        recordUndo(of: occurrence, before: before, status: status)
+    }
+
+    /// ⌘Z after Done / Skip: the reminder comes back as if never answered.
+    private func recordUndo(of occurrence: Occurrence, before: OccurrenceActions.Snapshot, status: OccurrenceStatus) {
+        guard status == .done || status == .skipped else { return }
+        let title = occurrence.item?.title ?? "Reminder"
+        undo.record((status == .done ? "Done: " : "Skipped: ") + title) { [weak self] in
+            guard let self, !occurrence.isDeleted else { return }
+            before.restore(occurrence)
+            if occurrence.status == .pending {
+                // Show it again on the next check.
+                occurrence.nextEscalationAt = self.clock()
+            }
+            try? self.modelContext?.save()
+            self.tick()
+        }
     }
 
     // MARK: - End of day
@@ -506,7 +636,7 @@ final class ReminderScheduler: ObservableObject {
 
     private func checkWeeklySummary(now: Date) {
         // One overlay at a time: wait for the end-of-day summary to be closed.
-        guard !showWeeklySummary, !showEndOfDaySummary, !showGoalCheckIn else { return }
+        guard !showWeeklySummary, !showEndOfDaySummary, !showGoalCheckIn, !showMissed else { return }
         guard Self.shouldShowWeeklySummary(settings: weeklySettings.value, now: now) else { return }
         weeklySettings.value.lastShownWeekKey = Insights.weekKey(for: now)
         showWeeklySummary = true

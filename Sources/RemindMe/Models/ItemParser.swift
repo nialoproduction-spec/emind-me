@@ -18,6 +18,13 @@ struct ParsedItem {
     var breakCycle: BreakCycleConfig? = nil
     /// What the person picked in the confirmation bar; nil = the default.
     var chosen: ItemType? = nil
+    /// One-time: "tomorrow 3pm", "Nov 5 at 10am", "in 2 hours".
+    var onceAt: Date? = nil
+    /// Monthly on this day ("pay rent on the 1st"), or yearly with `yearMonth`.
+    var monthDay: Int? = nil
+    var yearMonth: Int? = nil
+    /// Deadline ("Sharma teaser due Nov 10"): nudges 7, 3, 1 day before.
+    var dueDate: Date? = nil
 
     /// Has a time or interval, so it can be a reminder or a habit.
     var hasSchedule: Bool { kind != .goal }
@@ -40,6 +47,18 @@ struct ParsedItem {
             guard let intervalSeconds else { return "" }
             return "every \(Item.durationString(intervalSeconds))"
         case .scheduledRoutine:
+            if dueDate != nil {
+                let line = Item.specialSummary(repeat: .deadline, onceAt: nil, monthDay: nil, yearMonth: nil,
+                                               dueDate: dueDate, hour: hour, minute: minute) ?? ""
+                return line + " · nudges 7, 3, 1 day before"
+            }
+            let special: Item.Repeat? = onceAt != nil ? .once
+                : monthDay != nil ? (yearMonth != nil ? .yearly : .monthly) : nil
+            if let special, let line = Item.specialSummary(repeat: special, onceAt: onceAt, monthDay: monthDay,
+                                                           yearMonth: yearMonth, dueDate: nil,
+                                                           hour: hour, minute: minute) {
+                return line
+            }
             guard let hour, let minute else { return "" }
             let time = Item.clockTimeString(hour: hour, minute: minute)
             if weekdays.isEmpty || weekdays.count == 7 { return "\(time) · Daily" }
@@ -63,10 +82,13 @@ struct ParsedItem {
 /// model download, just regexes and small word lists. That matches the
 /// app's "no cloud, no account" brief, and keeps this instant.
 enum ItemParser {
-    static func parse(_ raw: String) -> ParsedItem {
+    static func parse(_ raw: String, now: Date = Date(), calendar: Calendar = .current) -> ParsedItem {
         // Typos in "every" ("evry", "rvry 4 min") are fixed and "remind me
         // to" is dropped first, so they never reach the title or the rules.
-        let cleaned = dropLeadIn(fixEveryTypos(raw))
+        let fixed = fixEveryTypos(raw)
+        let cleaned = dropLeadIn(fixed)
+        // "remind me to …" with a date but no time is a reminder (9 AM), not a goal.
+        let askedToRemind = cleaned != fixed
         // Hashtags first: "#work" anywhere sets the category and is taken out
         // of the text before anything else reads it.
         let (withoutTags, category) = extractCategory(from: cleaned)
@@ -84,7 +106,7 @@ enum ItemParser {
         // number can't be mistaken for part of the "every 40 min" interval.
         if let rest = breakPhrase(in: withoutTags) {
             let schedule = (withoutTags as NSString).replacingCharacters(in: rest.range, with: " ")
-            var cycle = parseSchedule(schedule)
+            var cycle = parseSchedule(schedule, now: now, calendar: calendar, askedToRemind: askedToRemind)
             if cycle.kind == .repeatingRoutine, let interval = cycle.intervalSeconds {
                 let config = BreakCycleConfig(workSeconds: Int(interval.rounded()), breakSeconds: Int(rest.seconds.rounded()))
                 cycle.category = category
@@ -93,7 +115,7 @@ enum ItemParser {
                 return cycle
             }
         }
-        var parsed = parseSchedule(withoutTags)
+        var parsed = parseSchedule(withoutTags, now: now, calendar: calendar, askedToRemind: askedToRemind)
         parsed.category = category
         return parsed
     }
@@ -256,7 +278,8 @@ enum ItemParser {
 
     private static let hashtagRegex = try! NSRegularExpression(pattern: #"#(\p{L}[\p{L}\p{N}_-]*)"#)
 
-    private static func parseSchedule(_ raw: String) -> ParsedItem {
+    private static func parseSchedule(_ raw: String, now: Date, calendar: Calendar,
+                                      askedToRemind: Bool) -> ParsedItem {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return ParsedItem(kind: .goal, title: "Untitled", intervalSeconds: nil,
@@ -342,7 +365,17 @@ enum ItemParser {
             }
         }
 
-        // 3. Weekday / daily repeat signal.
+        // 3. Dates: one-time ("tomorrow", "Nov 5", "in 2 hours"), monthly
+        // ("on the 1st"), yearly ("every Mar 12"), deadlines ("due Nov 10").
+        if intervalSeconds == nil,
+           var dated = datedSchedule(in: trimmed, hour: hour, minute: minute, now: now, calendar: calendar,
+                                     askedToRemind: askedToRemind) {
+            stripRanges += dated.ranges
+            dated.item.title = buildTitle(from: trimmed, stripping: stripRanges)
+            return dated.item
+        }
+
+        // 4. Weekday / daily repeat signal.
         var weekdays = Set<Int>()
         for matcher in weekdayMatchers {
             for match in matcher.regex.matches(in: trimmed, range: fullRange) {
@@ -379,6 +412,265 @@ enum ItemParser {
             hour: hour, minute: minute, weekdays: weekdays, targetDate: targetDate
         )
     }
+
+    // MARK: - Dates
+
+    /// One-time, monthly, yearly and deadline schedules, worked out from the
+    /// text (`hour` / `minute`: a clock time already found in it). Nil when
+    /// there's no date, or a date with no time that reads as a goal's target
+    /// ("finish the album by Nov 5").
+    static func datedSchedule(in text: String, hour: Int?, minute: Int?, now: Date, calendar: Calendar,
+                              askedToRemind: Bool) -> (item: ParsedItem, ranges: [NSRange])? {
+        let ns = text as NSString
+        let full = NSRange(location: 0, length: ns.length)
+        var ranges: [NSRange] = []
+        func base() -> ParsedItem {
+            ParsedItem(kind: .scheduledRoutine, title: "", intervalSeconds: nil, hour: hour, minute: minute,
+                       weekdays: [], targetDate: nil)
+        }
+        func at(_ day: Date, defaultHour: Int) -> Date {
+            calendar.date(bySettingHour: hour ?? defaultHour, minute: hour == nil ? 0 : (minute ?? 0),
+                          second: 0, of: day) ?? day
+        }
+
+        let dueMatch = deadlineRegex.firstMatch(in: text, range: full)
+        let monthDate = monthDayDate(in: text)
+        let relative = relativeDay(in: text, now: now, calendar: calendar)
+        let soon = Self.inDuration(in: text)
+
+        // Deadline: "due Nov 10", "deadline tomorrow", "due in 3 days".
+        if let dueMatch {
+            var day: Date?
+            if let monthDate {
+                day = monthDate.date(now: now, calendar: calendar)
+                ranges.append(monthDate.range)
+            } else if let relative {
+                day = relative.day
+                ranges.append(relative.range)
+            } else if let soon {
+                day = now.addingTimeInterval(soon.seconds)
+                ranges.append(soon.range)
+            }
+            if let day {
+                ranges.append(dueMatch.range)
+                var item = base()
+                let due = calendar.startOfDay(for: day)
+                item.dueDate = due
+                item.hour = hour ?? 10
+                item.minute = hour == nil ? 0 : (minute ?? 0)
+                return (item, ranges)
+            }
+        }
+
+        // "in 2 hours", "in 30 min": once, from now.
+        if let soon {
+            var item = base()
+            let when = now.addingTimeInterval(soon.seconds)
+            item.onceAt = when
+            let parts = calendar.dateComponents([.hour, .minute], from: when)
+            item.hour = parts.hour
+            item.minute = parts.minute
+            return (item, [soon.range])
+        }
+
+        let everyYear = everyYearRegex.firstMatch(in: text, range: full)
+        let yearlyWord = yearlyWordRegex.firstMatch(in: text, range: full) != nil
+        let everyMonth = everyMonthRegex.firstMatch(in: text, range: full)
+
+        if let monthDate {
+            ranges.append(monthDate.range)
+            // "every Mar 12", "Mar 12 every year", birthdays and anniversaries.
+            if monthDate.everyBefore || everyYear != nil || yearlyWord {
+                if let everyYear { ranges.append(everyYear.range) }
+                var item = base()
+                item.monthDay = monthDate.day
+                item.yearMonth = monthDate.month
+                item.hour = hour ?? 9
+                item.minute = hour == nil ? 0 : (minute ?? 0)
+                return (item, ranges)
+            }
+            // A date with no time and no "remind me": a goal's target date.
+            guard hour != nil || askedToRemind else { return nil }
+            var item = base()
+            item.onceAt = at(monthDate.date(now: now, calendar: calendar), defaultHour: 9)
+            item.hour = hour ?? 9
+            item.minute = hour == nil ? 0 : (minute ?? 0)
+            return (item, ranges)
+        }
+
+        // "on the 1st", "every 15th", "1st of every month", "monthly".
+        let ordinal = ordinalDay(in: text)
+        if ordinal != nil || everyMonth != nil {
+            if let ordinal { ranges.append(ordinal.range) }
+            if let everyMonth { ranges.append(everyMonth.range) }
+            var item = base()
+            item.monthDay = ordinal?.day ?? calendar.component(.day, from: now)
+            item.hour = hour ?? 9
+            item.minute = hour == nil ? 0 : (minute ?? 0)
+            return (item, ranges)
+        }
+
+        // "every year" / "yearly" with no date: on today's date each year.
+        if let everyYear {
+            var item = base()
+            item.monthDay = calendar.component(.day, from: now)
+            item.yearMonth = calendar.component(.month, from: now)
+            item.hour = hour ?? 9
+            item.minute = hour == nil ? 0 : (minute ?? 0)
+            return (item, [everyYear.range])
+        }
+
+        // "tomorrow 3pm", "tonight", "today at 5".
+        if let relative {
+            // No time and no "remind me" ("finish the edit tomorrow"): a goal.
+            guard hour != nil || askedToRemind else { return nil }
+            var item = base()
+            let when = at(relative.day, defaultHour: relative.defaultHour)
+            item.onceAt = when
+            item.hour = calendar.component(.hour, from: when)
+            item.minute = calendar.component(.minute, from: when)
+            return (item, [relative.range])
+        }
+        return nil
+    }
+
+    struct MonthDate {
+        let month: Int
+        let day: Int
+        let year: Int?
+        let range: NSRange
+        /// "every" right before it: yearly.
+        let everyBefore: Bool
+
+        /// This date at the start of its day: this year, or next year once
+        /// it has gone (unless a year was written).
+        func date(now: Date, calendar: Calendar) -> Date {
+            let thisYear = calendar.component(.year, from: now)
+            var comps = DateComponents(year: year ?? thisYear, month: month, day: day)
+            var date = calendar.date(from: comps) ?? now
+            if year == nil, date < calendar.startOfDay(for: now) {
+                comps.year = thisYear + 1
+                date = calendar.date(from: comps) ?? date
+            }
+            return date
+        }
+    }
+
+    private static let monthPattern = #"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"#
+
+    private static let monthDateRegex = try! NSRegularExpression(
+        pattern: #"(?<every>\b(?:every|each)\s+)?(?:\bon\s+)?(?:\b(?<mon>"# + monthPattern + #")\.?\s+(?<day>\d{1,2})(?:st|nd|rd|th)?|\b(?:the\s+)?(?<day2>\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(?<mon2>"# + monthPattern + #")\.?)(?:,?\s+(?<year>20\d{2}))?(?![a-z0-9])"#,
+        options: [.caseInsensitive]
+    )
+
+    /// "Nov 5", "November 5th", "5 Nov", "the 5th of November", "Mar 12, 2027".
+    static func monthDayDate(in text: String) -> MonthDate? {
+        let ns = text as NSString
+        for match in monthDateRegex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            func part(_ name: String) -> String? {
+                let range = match.range(withName: name)
+                return range.location == NSNotFound ? nil : ns.substring(with: range)
+            }
+            guard let monthWord = part("mon") ?? part("mon2"),
+                  let dayText = part("day") ?? part("day2"), let day = Int(dayText) else { continue }
+            // "may" is also an everyday word: only "May" counts.
+            if monthWord.lowercased() == "may", monthWord.first?.isUppercase != true { continue }
+            let month = monthIndex(monthWord)
+            guard month > 0, (1...monthLength(month)).contains(day) else { continue }
+            return MonthDate(month: month, day: day, year: part("year").flatMap { Int($0) },
+                             range: match.range, everyBefore: part("every") != nil)
+        }
+        return nil
+    }
+
+    static func monthIndex(_ word: String) -> Int {
+        let prefixes = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+        let start = String(word.lowercased().prefix(3))
+        return (prefixes.firstIndex(of: start) ?? -1) + 1
+    }
+
+    /// Longest the month can be (February: 29, so leap-day birthdays work).
+    private static func monthLength(_ month: Int) -> Int {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
+    }
+
+    private static let ordinalRegex = try! NSRegularExpression(
+        pattern: #"(?:\b(?:on|every|each)\s+(?:the\s+)?|\bthe\s+)(?<day>\d{1,2})(?:st|nd|rd|th)\b(?:\s+of\s+(?:every|each|the|a)\s+month)?|\b(?<day2>\d{1,2})(?:st|nd|rd|th)\s+of\s+(?:every|each|the|a)\s+month\b"#,
+        options: [.caseInsensitive]
+    )
+
+    /// "on the 1st", "every 15th", "the 5th", "1st of every month" (not "my
+    /// 2nd draft": it needs "on" / "every" / "the" before, or "of the month" after).
+    static func ordinalDay(in text: String) -> (day: Int, range: NSRange)? {
+        let ns = text as NSString
+        guard let match = ordinalRegex.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)) else { return nil }
+        let range = match.range(withName: "day").location != NSNotFound ? match.range(withName: "day") : match.range(withName: "day2")
+        guard range.location != NSNotFound, let day = Int(ns.substring(with: range)), (1...31).contains(day) else { return nil }
+        return (day, match.range)
+    }
+
+    private static let relativeRegex = try! NSRegularExpression(
+        pattern: #"\b(?:(?<after>day\s+after\s+tomorrow)|(?<tomorrow>tomorrow|tmrw|tmr|tomorow|tommorow|tommorrow)|(?<tonight>tonight|tonite)|(?<today>today))\b(?:\s+(?:morning|evening|night))?"#,
+        options: [.caseInsensitive]
+    )
+
+    /// "today", "tonight" (8 PM), "tomorrow" (9 AM), "day after tomorrow".
+    static func relativeDay(in text: String, now: Date, calendar: Calendar)
+        -> (day: Date, defaultHour: Int, range: NSRange)? {
+        let ns = text as NSString
+        guard let match = relativeRegex.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)) else { return nil }
+        let today = calendar.startOfDay(for: now)
+        func has(_ name: String) -> Bool { match.range(withName: name).location != NSNotFound }
+        let phrase = ns.substring(with: match.range).lowercased()
+        let evening = phrase.hasSuffix("evening") || phrase.hasSuffix("night")
+        if has("after") {
+            return (calendar.date(byAdding: .day, value: 2, to: today) ?? today, evening ? 19 : 9, match.range)
+        }
+        if has("tomorrow") {
+            return (calendar.date(byAdding: .day, value: 1, to: today) ?? today, evening ? 19 : 9, match.range)
+        }
+        if has("tonight") { return (today, 20, match.range) }
+        return (today, evening ? 19 : 18, match.range)
+    }
+
+    private static let inDurationRegex = try! NSRegularExpression(
+        pattern: #"\bin\s+(?:(?<qty>\d+(?:\.\d+)?)\s*(?<unit>sec[a-z]*|min[a-z]*|hou?r[a-z]*|hrs?|day[a-z]*|week[a-z]*|wk[a-z]*|s|m|h|d|w)|(?<wqty>half\s+an?|an?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|forty-five|fifty|sixty)\s+(?<wunit>sec[a-z]*|min[a-z]*|hou?r[a-z]*|hrs?|day[a-z]*|week[a-z]*|wk[a-z]*))\b"#,
+        options: [.caseInsensitive]
+    )
+
+    /// "in 2 hours", "in 30 min", "in an hour", "in half an hour", "in 3 days".
+    static func inDuration(in text: String) -> (seconds: Double, range: NSRange)? {
+        let ns = text as NSString
+        guard let match = inDurationRegex.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)) else { return nil }
+        func part(_ name: String) -> String? {
+            let range = match.range(withName: name)
+            return range.location == NSNotFound ? nil : ns.substring(with: range)
+        }
+        guard let qtyText = part("qty") ?? part("wqty"), let unit = (part("unit") ?? part("wunit"))?.lowercased(),
+              let quantity = parseQuantity(qtyText), quantity > 0 else { return nil }
+        return (quantity * unitSeconds(unit), match.range)
+    }
+
+    private static let deadlineRegex = try! NSRegularExpression(
+        pattern: #"\b(?:due|deadline)\b(?:\s*:)?(?:\s+(?:on|by|is))?"#,
+        options: [.caseInsensitive]
+    )
+
+    private static let everyYearRegex = try! NSRegularExpression(
+        pattern: #"\b(?:every|each)\s+year\b|\byearly\b|\bannually\b"#,
+        options: [.caseInsensitive]
+    )
+
+    /// Things that come round every year: a date with these is yearly.
+    private static let yearlyWordRegex = try! NSRegularExpression(
+        pattern: #"\b(?:birthday|bday|anniversary)\b"#,
+        options: [.caseInsensitive]
+    )
+
+    private static let everyMonthRegex = try! NSRegularExpression(
+        pattern: #"\b(?:every|each)\s+month\b|\bmonthly\b"#,
+        options: [.caseInsensitive]
+    )
 
     // MARK: - Title cleanup
 

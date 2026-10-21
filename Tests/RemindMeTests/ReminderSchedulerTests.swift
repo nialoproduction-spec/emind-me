@@ -33,6 +33,9 @@ final class ReminderSchedulerTests: XCTestCase {
     private var goalNudge: PersistedSettings<GoalNudgeSettings>!
     private var notices: [NoticeContent] = []
     private var popup: PersistedSettings<ReminderPopupSettings>!
+    private var missedStore: PersistedSettings<MissedList>!
+    private var ignoredStore: PersistedSettings<IgnoreCounts>!
+    private var undoCenter: UndoCenter!
     private var scheduler: ReminderScheduler!
 
     /// Fresh in-memory store + scheduler for each test (XCTest makes a new
@@ -47,6 +50,9 @@ final class ReminderSchedulerTests: XCTestCase {
         weekly = .testing(WeeklySummarySettings(isEnabled: false))
         goalNudge = .testing(GoalNudgeSettings(isEnabled: false))
         popup = .testing(ReminderPopupSettings())
+        missedStore = .testing(MissedList())
+        ignoredStore = .testing(IgnoreCounts())
+        undoCenter = UndoCenter()
         scheduler = ReminderScheduler(
             presenter: presenter,
             now: { [unowned self] in self.clock },
@@ -58,7 +64,10 @@ final class ReminderSchedulerTests: XCTestCase {
             weeklySettings: weekly,
             goalNudgeSettings: goalNudge,
             showNotice: { [unowned self] in self.notices.append($0) },
-            popupSettings: popup
+            popupSettings: popup,
+            missed: missedStore,
+            ignored: ignoredStore,
+            undo: undoCenter
         )
         scheduler.attach(modelContext: context)
     }
@@ -77,6 +86,121 @@ final class ReminderSchedulerTests: XCTestCase {
 
     private func occurrences() -> [Occurrence] {
         (try? context.fetch(FetchDescriptor<Occurrence>())) ?? []
+    }
+
+    // MARK: - One-time, deadlines, missed, loud, undo
+
+    func testOneTimeReminderFiresOnceThenGoesAway() throws {
+        try makeFixture()
+        let item = Item(title: "Call client", kind: .scheduledRoutine, hour: 15, minute: 0, style: .justRemind)
+        item.onceAt = clock.addingTimeInterval(60)
+        item.nextFireDate = item.computeNextFireDate(after: clock)
+        context.insert(item)
+        advance(minutes: 1.5)
+        scheduler.tick()
+        XCTAssertEqual(notices.map(\.title), ["Call client"])
+        XCTAssertNotNil(item.endedAt, "it's over: gone from the list")
+        XCTAssertNil(item.nextFireDate)
+        advance(minutes: 24 * 60)
+        scheduler.tick()
+        XCTAssertEqual(notices.count, 1, "never again")
+    }
+
+    func testDeadlineNudgesSevenThreeOneAndOnTheDayThenEnds() throws {
+        try makeFixture()
+        let calendar = Calendar.current
+        let due = calendar.date(byAdding: .day, value: 8, to: calendar.startOfDay(for: clock))!
+        let item = Item(title: "Sharma teaser", kind: .scheduledRoutine, hour: 10, minute: 0, style: .justRemind)
+        item.dueDate = due
+        item.nextFireDate = item.computeNextFireDate(after: clock)
+        context.insert(item)
+        for _ in 0..<6 {
+            guard let next = item.nextFireDate else { break }
+            clock = next.addingTimeInterval(30)
+            scheduler.tick()
+        }
+        XCTAssertEqual(notices.count, 4, "7, 3 and 1 day before, and on the day")
+        XCTAssertTrue(notices.first?.detail?.hasPrefix("Due in 7 days") ?? false, notices.first?.detail ?? "")
+        XCTAssertEqual(notices.last?.detail, "Due today")
+        XCTAssertNil(item.endedAt, "still listed on its day")
+        clock = due.addingTimeInterval(86400 + 60)
+        scheduler.tick()
+        XCTAssertNotNil(item.endedAt, "over once its day has gone")
+    }
+
+    func testLateRemindersGoOnTheMissedList() throws {
+        try makeFixture()
+        let item = addRepeating(everyMinutes: 40, title: "Msg wife")
+        item.style = .justRemind
+        advance(minutes: 5 * 60) // the Mac was asleep
+        scheduler.tick()
+        XCTAssertTrue(notices.isEmpty, "no stale popup")
+        let entry = try XCTUnwrap(missedStore.value.entries.first)
+        XCTAssertEqual(entry.title, "Msg wife")
+        XCTAssertEqual(entry.count, 8, "due 8 times while asleep")
+        XCTAssertTrue(scheduler.showMissed)
+        XCTAssertEqual(presenter.overlayShown, 1)
+        scheduler.dismissMissed()
+        XCTAssertTrue(missedStore.value.isEmpty)
+        XCTAssertFalse(scheduler.showMissed)
+    }
+
+    func testRemindersWhileAwayAreMissedNotDropped() throws {
+        try makeFixture()
+        let item = addRepeating(everyMinutes: 40)
+        item.style = .justRemind
+        away = true
+        advance(minutes: 1)
+        scheduler.tick()
+        XCTAssertTrue(notices.isEmpty)
+        XCTAssertEqual(missedStore.value.entries.map(\.title), ["Drink water"])
+        XCTAssertFalse(scheduler.showMissed, "waits until you're back")
+        away = false
+        scheduler.tick()
+        XCTAssertTrue(scheduler.showMissed)
+    }
+
+    func testIgnoredThreeTimesComesBackLoud() throws {
+        try makeFixture()
+        let item = addRepeating(everyMinutes: 40)
+        item.style = .justRemind
+        for _ in 0..<3 { scheduler.popupOutcome(itemID: item.id, ignored: true) }
+        advance(minutes: 1)
+        scheduler.tick()
+        let shown = try XCTUnwrap(notices.last)
+        XCTAssertTrue(shown.loud)
+        XCTAssertTrue(shown.sticky, "stays until clicked")
+        XCTAssertEqual(shown.itemID, item.id)
+        XCTAssertEqual(shown.detail, ReminderScheduler.loudLine(times: 3))
+        scheduler.popupOutcome(itemID: item.id, ignored: false)
+        XCTAssertFalse(ignoredStore.value.isLoud(item.id), "clicked: back to normal")
+    }
+
+    func testHabitLeftUnfinishedCountsAsIgnored() throws {
+        try makeFixture()
+        let item = addRepeating(everyMinutes: 600)
+        scheduler.tick()
+        for _ in 0..<3 {
+            advance(minutes: 16)
+            scheduler.tick()
+        }
+        XCTAssertEqual(occurrences().first?.status, .unfinished)
+        XCTAssertEqual(ignoredStore.value.count(for: item.id), 1)
+        scheduler.markDone()
+        XCTAssertEqual(ignoredStore.value.count(for: item.id), 0, "answered: the count starts over")
+    }
+
+    func testUndoDoneBringsTheReminderBack() throws {
+        try makeFixture()
+        addRepeating(everyMinutes: 600)
+        scheduler.tick()
+        scheduler.markDone()
+        XCTAssertNil(scheduler.activeOccurrence)
+        XCTAssertEqual(undoCenter.available?.label, "Done: Drink water")
+        XCTAssertTrue(undoCenter.undoLast())
+        XCTAssertEqual(occurrences().first?.status, .pending)
+        XCTAssertNotNil(scheduler.activeOccurrence, "on screen again")
+        XCTAssertFalse(undoCenter.undoLast(), "only once")
     }
 
     // MARK: - Reminder style / goal check-in

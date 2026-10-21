@@ -150,7 +150,13 @@ struct ReminderRowView: View {
     private var kindIcon: String {
         switch item.kind {
         case .repeatingRoutine: return "repeat"
-        case .scheduledRoutine: return "clock"
+        case .scheduledRoutine:
+            switch item.repeatKind {
+            case .daily, .weekly: return "clock"
+            case .once: return "calendar"
+            case .monthly, .yearly: return "calendar.badge.clock"
+            case .deadline: return "hourglass"
+            }
         case .goal: return "flag"
         }
     }

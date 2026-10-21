@@ -47,6 +47,37 @@ enum Insights {
         return starts.reversed().compactMap { byDay[$0] }
     }
 
+    /// A month laid out as weeks for the habit calendar: `nil` pads the days
+    /// before the 1st (from the calendar's first weekday) and after the last.
+    static func monthGrid(_ occurrences: [Occurrence], month: Date, calendar: Calendar = .current) -> [[DayRecord?]] {
+        guard let interval = calendar.dateInterval(of: .month, for: month),
+              let days = calendar.range(of: .day, in: .month, for: interval.start)?.count else { return [] }
+        var byDay: [Date: DayRecord] = [:]
+        for offset in 0..<days {
+            if let day = calendar.date(byAdding: .day, value: offset, to: interval.start) {
+                byDay[day] = DayRecord(day: day)
+            }
+        }
+        for occurrence in occurrences {
+            let day = calendar.startOfDay(for: occurrence.scheduledFireDate)
+            guard byDay[day] != nil else { continue }
+            switch occurrence.status {
+            case .done: byDay[day]!.done += 1
+            case .skipped: byDay[day]!.skipped += 1
+            case .unfinished: byDay[day]!.unfinished += 1
+            case .pending: byDay[day]!.pending += 1
+            }
+        }
+        let firstWeekday = calendar.component(.weekday, from: interval.start)
+        let lead = (firstWeekday - calendar.firstWeekday + 7) % 7
+        var cells: [DayRecord?] = Array(repeating: nil, count: lead)
+        for offset in 0..<days {
+            if let day = calendar.date(byAdding: .day, value: offset, to: interval.start) { cells.append(byDay[day]) }
+        }
+        while cells.count % 7 != 0 { cells.append(nil) }
+        return stride(from: 0, to: cells.count, by: 7).map { Array(cells[$0..<$0 + 7]) }
+    }
+
     /// Kept days in a row, counting back from today. Days with no reminders
     /// (paused, or not one of its weekdays) don't break it, and today never
     /// breaks it while it's still in progress.

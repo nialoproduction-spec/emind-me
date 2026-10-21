@@ -22,9 +22,21 @@ enum ItemDeletion {
         _ item: Item,
         in context: ModelContext,
         scheduler: ReminderScheduler? = nil,
-        cancelNotifications: ((Item) -> Void)? = nil
+        cancelNotifications: ((Item) -> Void)? = nil,
+        reschedule: ((Item) -> Void)? = nil
     ) {
         let scheduler = scheduler ?? ReminderScheduler.shared
+        // Kept, so ⌘Z can bring it back with its whole history.
+        let copy = Backup.make(of: item, from: context)
+        let title = item.title
+        let reschedule = reschedule ?? { NotificationService.shared.schedule(for: $0) }
+        scheduler.undo.record("Deleted “\(title)”") {
+            Backup.restore(copy, into: context)
+            let ids = Set(copy.items.map(\.id))
+            for restored in (try? context.fetch(FetchDescriptor<Item>())) ?? [] where ids.contains(restored.id) {
+                reschedule(restored)
+            }
+        }
         (cancelNotifications ?? { NotificationService.shared.cancel(for: $0) })(item)
 
         if scheduler.closeLiveReminder(belongingTo: item) {

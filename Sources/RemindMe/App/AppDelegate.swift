@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var modelContainer: ModelContainer!
     private let menuBarFace = MenuBarFace()
     private var cancellables = Set<AnyCancellable>()
+    private var backupTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory) // belt-and-suspenders alongside LSUIElement
@@ -20,6 +21,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ReminderScheduler.shared.start(modelContext: modelContainer.mainContext)
             GlobalHotkeys.shared.start()
             BreakCycleManager.shared.activate()
+            LoginItem.applyAtLaunch()
+            RenderWatcher.shared.start()
+            self.startDailyBackups()
         }
 
         setUpStatusItem()
@@ -27,6 +31,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    /// A copy of everything, once a day, in Application Support (last 7 kept).
+    private func startDailyBackups() {
+        let save = { [weak self] in
+            guard let context = self?.modelContainer?.mainContext else { return }
+            Backup.autoSave(from: context)
+        }
+        save()
+        let timer = Timer(timeInterval: 3 * 3600, repeats: true) { _ in
+            Task { @MainActor in save() }
+        }
+        timer.tolerance = 600
+        RunLoop.main.add(timer, forMode: .common)
+        backupTimer = timer
     }
 
     private func setUpStatusItem() {
@@ -61,6 +80,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showMenu() {
         let menu = NSMenu()
+        if let action = UndoCenter.shared.available {
+            menu.addItem(withTitle: "Undo \(action.label)", action: #selector(undoLast), keyEquivalent: "").target = self
+            menu.addItem(.separator())
+        }
         menu.addItem(withTitle: "Weekly Summary", action: #selector(showWeeklySummary), keyEquivalent: "").target = self
         if BreakCycleManager.shared.isRunning {
             let keep = NSMenuItem(title: "Keep Work Countdown at Notch", action: #selector(toggleKeepCountdown), keyEquivalent: "")
@@ -74,6 +97,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
         statusItem.button?.performClick(nil)
         statusItem.menu = nil // detach so left-click goes back to toggling the panel
+    }
+
+    @objc private func undoLast() {
+        UndoCenter.shared.undoLast()
     }
 
     @objc private func showWeeklySummary() {

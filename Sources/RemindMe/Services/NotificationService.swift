@@ -50,9 +50,31 @@ final class NotificationService {
     }
 
     private func scheduleClockTime(_ item: Item) {
-        guard let hour = item.hour, let minute = item.minute else { return }
+        guard let hour = item.hour, let minute = item.minute, !item.isOver else { return }
         let content = makeContent(for: item)
         let weekdays = item.weekdaysRaw ?? []
+
+        // One-time, monthly, yearly: one trigger each.
+        var special: (DateComponents, Bool)?
+        switch item.repeatKind {
+        case .once:
+            guard let onceAt = item.onceAt, onceAt > .now else { return }
+            special = (Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: onceAt), false)
+        case .monthly:
+            special = (DateComponents(day: item.monthDay, hour: hour, minute: minute), true)
+        case .yearly:
+            special = (DateComponents(month: item.yearMonth, day: item.monthDay, hour: hour, minute: minute), true)
+        case .deadline:
+            return // deadlines use the little popup
+        case .daily, .weekly:
+            break
+        }
+        if let special {
+            let trigger = UNCalendarNotificationTrigger(dateMatching: special.0, repeats: special.1)
+            let request = UNNotificationRequest(identifier: item.id.uuidString, content: content, trigger: trigger)
+            UNUserNotificationCenter.current().add(request)
+            return
+        }
 
         if weekdays.isEmpty {
             var comps = DateComponents()

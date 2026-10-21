@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Settings → Smart: snooze lengths, the weekly summary, holding reminders
@@ -12,10 +13,16 @@ struct SmartSettingsView: View {
     @ObservedObject private var face = AppSettings.face
     @ObservedObject private var smart = AppSettings.smart
     @ObservedObject private var categories = AppSettings.categories
+    @ObservedObject private var login = AppSettings.login
+    @ObservedObject private var renderWatch = AppSettings.renderWatch
+    @Environment(\.modelContext) private var modelContext
     @State private var newCategory = ""
+    @State private var restoreResult: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            loginSection
+            Divider()
             reminderPopupSection
             Divider()
             faceSection
@@ -34,10 +41,125 @@ struct SmartSettingsView: View {
             Divider()
             shortcutsSection
             Divider()
+            renderSection
+            Divider()
+            backupSection
+            Divider()
             categoriesSection
         }
         // Everything wraps to the sheet's width; nothing runs off the edges.
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Open at login
+
+    @ViewBuilder
+    private var loginSection: some View {
+        Text("Open at login").font(.headline)
+        Toggle("Open Remind Me when the Mac starts", isOn: Binding(
+            get: { login.value.openAtLogin },
+            set: { on in
+                LoginItem.set(on)
+                login.value.openAtLogin = LoginItem.isOn
+            }
+        ))
+        if login.value.openAtLogin, LoginItem.needsApproval {
+            Text("macOS wants a yes: turn Remind Me on in System Settings → General → Login Items.")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Open Login Items") { LoginItem.openSystemSettings() }
+                .controlSize(.small)
+        } else {
+            Text("So reminders keep firing after a restart.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: - Render done ping
+
+    @ViewBuilder
+    private var renderSection: some View {
+        Text("Render done ping").font(.headline)
+        Toggle("Tell me when a DaVinci render finishes", isOn: Binding(
+            get: { renderWatch.value.isEnabled },
+            set: { on in
+                renderWatch.value.isEnabled = on
+                if on, renderWatch.value.folders.isEmpty {
+                    let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first?.path
+                    renderWatch.value.folders = [movies ?? NSHomeDirectory() + "/Movies"]
+                }
+            }
+        ))
+        if renderWatch.value.isEnabled {
+            ForEach(renderWatch.value.folders, id: \.self) { folder in
+                HStack(spacing: 6) {
+                    Image(systemName: "folder").foregroundStyle(.secondary)
+                    Text((folder as NSString).abbreviatingWithTildeInPath)
+                        .font(.callout)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    Button {
+                        renderWatch.value.folders.removeAll { $0 == folder }
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stop watching this folder")
+                }
+            }
+            Button("Add a folder…", action: addRenderFolder)
+                .controlSize(.small)
+        }
+        Text("Watches the folders you render into (and the ones inside). When a new video there stops growing while DaVinci Resolve is open, it says \"Render done\".")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func addRenderFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Watch"
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if !renderWatch.value.folders.contains(url.path) { renderWatch.value.folders.append(url.path) }
+    }
+
+    // MARK: - Backup
+
+    @ViewBuilder
+    private var backupSection: some View {
+        Text("Backup").font(.headline)
+        HStack {
+            Button("Back up…") { Backup.exportWithPanel(from: modelContext) }
+            Button("Restore…") {
+                if let result = Backup.importWithPanel(into: modelContext) {
+                    restoreResult = result.items == 0 && result.entries == 0
+                        ? "Nothing new: everything in that file is already here."
+                        : "Brought back \(result.items) item\(result.items == 1 ? "" : "s") and \(result.entries) history entr\(result.entries == 1 ? "y" : "ies")."
+                }
+            }
+            Button("Show backups") {
+                try? FileManager.default.createDirectory(at: Backup.folder, withIntermediateDirectories: true)
+                NSWorkspace.shared.open(Backup.folder)
+            }
+        }
+        .controlSize(.small)
+        if let restoreResult {
+            Text(restoreResult)
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        Text("One file with every reminder, habit, goal and deadline and their history. A copy is also saved every day (the last 7 are kept). Restoring only adds what's missing; it never deletes.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: - Menu bar face
