@@ -379,7 +379,7 @@ final class UIPreviewTests: XCTestCase {
                                                   sticky: true, loud: true), life: PopupLife())
                 .frame(width: size.width, height: size.height)
             NoticePillView(content: NoticeContent(title: "Render done", detail: "Sharma_Teaser_v3.mov",
-                                                  duration: 20, mood: .done), life: PopupLife())
+                                                  duration: 20, mood: .done, plainDetail: true), life: PopupLife())
                 .frame(width: size.width, height: size.height)
         }
         .padding(10)

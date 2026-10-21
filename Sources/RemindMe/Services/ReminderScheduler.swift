@@ -319,6 +319,7 @@ final class ReminderScheduler: ObservableObject {
                                         quote: detail ?? ReminderQuotes.quote(for: item.title, pick: Int.random(in: 0..<1000)),
                                         settings: popupSettings.value)
         content.itemID = item.id
+        content.plainDetail = detail != nil
         if ignored.value.isLoud(item.id) {
             // Ignored again and again: it comes back louder and waits for a click.
             content.loud = true

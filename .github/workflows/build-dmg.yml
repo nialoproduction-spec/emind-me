@@ -59,10 +59,12 @@ jobs:
             echo "::error title=Test problems::${body}"
           fi
           # A crash prints no failure line: say which test was running, and the end of the log.
-          last=$(grep -E "Test Case .* started" test.log | tail -1)
-          echo "::notice title=Last test started::${last:-none}"
-          tail -40 test.log | grep -v "^\s*$" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}' > tail.txt
-          echo "::notice title=End of test log::$(cat tail.txt)"
+          if [ -s problems.txt ]; then
+            last=$(grep -E "Test Case .* started" test.log | tail -1)
+            echo "::notice title=Last test started::${last:-none}"
+            tail -40 test.log | grep -v "^\s*$" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}' > tail.txt
+            echo "::notice title=End of test log::$(cat tail.txt)"
+          fi
 
       - name: Build and package
         run: |

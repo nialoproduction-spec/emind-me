@@ -179,7 +179,7 @@ final class RenderWatcher {
             return
         }
         NoticePillController.shared.show(NoticeContent(title: "Render done", detail: name, duration: 20,
-                                                       mood: .done))
+                                                       mood: .done, plainDetail: true))
     }
 }
 

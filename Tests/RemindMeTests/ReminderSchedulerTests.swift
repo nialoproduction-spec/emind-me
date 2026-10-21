@@ -122,6 +122,7 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertEqual(notices.count, 4, "7, 3 and 1 day before, and on the day")
         XCTAssertTrue(notices.first?.detail?.hasPrefix("Due in 7 days") ?? false, notices.first?.detail ?? "")
         XCTAssertEqual(notices.last?.detail, "Due today")
+        XCTAssertEqual(notices.last?.plainDetail, true, "information, not a quote")
         XCTAssertNil(item.endedAt, "still listed on its day")
         clock = due.addingTimeInterval(86400 + 60)
         scheduler.tick()

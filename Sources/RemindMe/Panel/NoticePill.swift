@@ -31,6 +31,9 @@ struct NoticeContent: Equatable {
     var loud = false
     /// The face's mood while it waits (a finished render is happy).
     var mood: FaceMood? = nil
+    /// The detail is information (a file name, "Due in 3 days"), not a
+    /// quote: no quote marks.
+    var plainDetail = false
     var id = UUID()
 }
 
@@ -132,7 +135,7 @@ struct NoticePillView: View {
                     .frame(maxWidth: .infinity)
 
                 if let line {
-                    Text(quiet ? "“\(line)”" : line)
+                    Text(quiet && !content.plainDetail ? "“\(line)”" : line)
                         .font(.system(size: max(theme.fontSize - 2, 10), weight: quiet ? .regular : .semibold)
                             .italic())
                         .foregroundStyle(theme.text.opacity(quiet ? 0.55 : 0.9))
