@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NotificationService.shared.requestAuthorizationIfNeeded()
             ReminderScheduler.shared.start(modelContext: modelContainer.mainContext)
             GlobalHotkeys.shared.start()
+            VoiceHold.shared.start()
             BreakCycleManager.shared.activate()
             LoginItem.applyAtLaunch()
             RenderWatcher.shared.start()

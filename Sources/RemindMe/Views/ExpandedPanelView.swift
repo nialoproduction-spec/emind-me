@@ -38,6 +38,7 @@ struct ExpandedPanelView: View {
 
     @Environment(\.modelContext) private var modelContext
     @ObservedObject private var draft = PanelDraft.shared
+    @ObservedObject private var voice = VoiceInput.shared
     @ObservedObject private var smart = AppSettings.smart
     @ObservedObject private var undo = UndoCenter.shared
     @FocusState private var fieldFocused: Bool
@@ -587,7 +588,14 @@ struct ExpandedPanelView: View {
 
     private var inputRow: some View {
         HStack(spacing: 8) {
-            TextField("Drink water every 40 min", text: $draft.text)
+            if voice.isListening {
+                // Red while Command is held; released to stop.
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.red)
+                    .help("Listening. Let go of Command to stop.")
+            }
+            TextField(voice.isListening ? "Listening…" : "Drink water every 40 min", text: $draft.text)
                 .textFieldStyle(.plain)
                 .font(theme.font)
                 .foregroundStyle(theme.text)

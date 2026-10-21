@@ -57,7 +57,8 @@ if [ -f "Resources/AppIcon.icns" ]; then
 fi
 
 echo "-> Signing app (identity: ${IDENTITY})..."
-codesign --force --deep --options runtime --sign "${IDENTITY}" "${APP_DIR}"
+codesign --force --deep --options runtime --entitlements "Resources/RemindMe.entitlements" \
+    --sign "${IDENTITY}" "${APP_DIR}"
 codesign --verify --verbose "${APP_DIR}"
 
 echo "-> Building disk image..."
