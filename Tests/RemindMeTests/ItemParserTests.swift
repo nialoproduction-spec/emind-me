@@ -69,6 +69,36 @@ final class ItemParserTests: XCTestCase {
         XCTAssertEqual(p.title, "Call mom")
     }
 
+    func testTimeWithoutAt() {
+        let wife = ItemParser.parse("remind me to msg wife every 6pm")
+        XCTAssertEqual(wife.kind, .scheduledRoutine, "every 6pm = every day at 6 PM, not a goal")
+        XCTAssertEqual(wife.hour, 18)
+        XCTAssertEqual(wife.minute, 0)
+        XCTAssertEqual(wife.title, "Msg wife")
+        XCTAssertTrue(wife.weekdays.isEmpty, "every day")
+
+        let call = ItemParser.parse("call mom 6:30 pm")
+        XCTAssertEqual(call.hour, 18)
+        XCTAssertEqual(call.minute, 30)
+        XCTAssertEqual(call.title, "Call mom")
+
+        let standup = ItemParser.parse("standup every weekday 9.15am")
+        XCTAssertEqual(standup.hour, 9)
+        XCTAssertEqual(standup.minute, 15)
+        XCTAssertEqual(standup.weekdays, [2, 3, 4, 5, 6])
+        XCTAssertEqual(standup.title, "Standup")
+
+        XCTAssertEqual(ItemParser.parse("take pills 21:00").hour, 21)
+        XCTAssertEqual(ItemParser.parse("msg wife each six pm").hour, 18)
+        XCTAssertEqual(ItemParser.parse("evry 6pm stretch").title, "Stretch", "typo of every too")
+
+        // Plain numbers aren't times.
+        XCTAssertNil(ItemParser.parse("drink 3 glasses a day").hour)
+        XCTAssertNil(ItemParser.parse("read 2 chapters").hour)
+        XCTAssertNil(ItemParser.parse("finish draft by 21.10").hour, "a date, not a time")
+        XCTAssertEqual(ItemParser.parse("drink water every 40 min").intervalSeconds, 2400, "intervals unchanged")
+    }
+
     func testTwelveAMIsMidnightAndTwelvePMIsNoon() {
         XCTAssertEqual(ItemParser.parse("backup at 12am").hour, 0)
         XCTAssertEqual(ItemParser.parse("lunch at 12pm").hour, 12)

@@ -153,7 +153,8 @@ Design/, scripts/trace_faces.py  source art + the tracer that generated Faces/Fa
 - Type is picked for you as you type (a time → Reminder, none → Goal) and shown by `TypePicker`,
   three icons beside the send arrow: the chosen one lit blue, the rest grey; click to switch
   (Habit also ⌘↩). No preview bar pops up while typing. "remind me to" and typos of "every" / units are
-  cleaned up by the parser first.
+  cleaned up by the parser first. A clock time works with or without "at" ("at 6pm", "every 6pm" =
+  daily, "6:30 pm", "9.15am", "21:00"; `bareClockTime` needs am/pm or a colon so plain numbers don't count).
 - Rows show "N total" and "N days in a row". A habit card has three buttons only: Done, Snooze
   (shortest length; right-click for the others), Skip.
 - All sounds are off. Don't add any.

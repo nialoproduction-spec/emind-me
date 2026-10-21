@@ -329,6 +329,11 @@ enum ItemParser {
                     minute = parsedMinute
                     stripRanges.append(match.range)
                 }
+            } else if let time = bareClockTime(in: trimmed) {
+                // No "at": "every 6pm", "6:30 pm", "9.15am", "21:00".
+                hour = time.hour
+                minute = time.minute
+                stripRanges.append(time.range)
             } else if let match = clockWordRegex.firstMatch(in: trimmed, range: fullRange) {
                 let word = ns.substring(with: match.range).lowercased()
                 hour = word == "noon" ? 12 : 0
@@ -496,6 +501,42 @@ enum ItemParser {
 
     private static let clockAtRegex = try! NSRegularExpression(
         pattern: #"\bat\s+(?<hour>\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?:\s*:\s*(?<minute>\d{2}))?\s*(?<ampm>a\.?m\.?|p\.?m\.?|o'clock)?"#,
+        options: [.caseInsensitive]
+    )
+
+    /// A clock time written without "at": "6pm", "every 6pm" (daily),
+    /// "6:30 pm", "9.15am", "six pm", "21:00". It needs am/pm or a colon
+    /// with minutes, so plain numbers ("3 glasses", "2 times") never count.
+    /// A leading "every" / "each" goes with it, so the title stays clean.
+    static func bareClockTime(in text: String) -> (hour: Int, minute: Int, range: NSRange)? {
+        let ns = text as NSString
+        for match in bareClockRegex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            func part(_ name: String) -> String? {
+                let range = match.range(withName: name)
+                return range.location == NSNotFound ? nil : ns.substring(with: range).lowercased()
+            }
+            guard let hourWord = part("hour") else { continue }
+            let ampm = part("ampm")
+            let minute = part("minute").flatMap { Int($0) }
+            // Without am/pm only "18:00"-style (a colon and minutes) counts.
+            if ampm == nil, minute == nil || part("sep") != ":" { continue }
+            guard var hour = Int(hourWord) ?? wordNumbers[hourWord].map(Int.init) else { continue }
+            if let ampm {
+                guard (1...12).contains(hour) else { continue }
+                if ampm.hasPrefix("p"), hour != 12 { hour += 12 }
+                if ampm.hasPrefix("a"), hour == 12 { hour = 0 }
+            } else if !(0...23).contains(hour) {
+                continue
+            }
+            let minutes = minute ?? 0
+            guard (0...59).contains(minutes) else { continue }
+            return (hour, minutes, match.range)
+        }
+        return nil
+    }
+
+    private static let bareClockRegex = try! NSRegularExpression(
+        pattern: #"(?:\b(?:every|each)\s+)?\b(?<hour>\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?:\s*(?<sep>[:.])\s*(?<minute>\d{2}))?\s*(?<ampm>a\.?m\.?|p\.?m\.?)?(?![a-z0-9])"#,
         options: [.caseInsensitive]
     )
 
