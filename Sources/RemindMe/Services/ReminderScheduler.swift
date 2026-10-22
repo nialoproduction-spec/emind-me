@@ -304,6 +304,7 @@ final class ReminderScheduler: ObservableObject {
         guard let modelContext else { return }
         let occurrence = Occurrence(item: item, scheduledFireDate: dueAt)
         modelContext.insert(occurrence)
+        DeliveryLog.record(.fired, title: item.title, at: clock())
 
         // Advance past this firing. If the Mac was asleep long enough that
         // the next computed time is itself already in the past, jump
@@ -348,6 +349,7 @@ final class ReminderScheduler: ObservableObject {
     private func fireQuietReminder(item: Item, dueAt: Date, held: Bool) {
         let current = clock()
         let count = Self.dueCount(of: item, from: dueAt, to: current)
+        DeliveryLog.record(.fired, title: item.title, at: current)
         var next = item.computeNextFireDate(after: dueAt)
         if let candidate = next, candidate <= current {
             next = item.computeNextFireDate(after: current)
@@ -359,6 +361,8 @@ final class ReminderScheduler: ObservableObject {
         // asleep or off): it goes on the "You missed" list for when you're back.
         let late = current.timeIntervalSince(dueAt) > Self.lateAfter
         guard !held, !late else {
+            DeliveryLog.record(.missed, title: item.title, at: current,
+                               detail: late ? "Came due while the Mac was asleep or off" : "Held while away or in full screen")
             missed.value.add(title: item.title, dueAt: dueAt, count: count, detail: detail)
             return
         }
@@ -373,6 +377,7 @@ final class ReminderScheduler: ObservableObject {
             content.sticky = true
             content.detail = Self.loudLine(times: ignored.value.count(for: item.id))
         }
+        DeliveryLog.record(.shown, title: item.title, at: current)
         showNotice(content)
     }
 
@@ -409,10 +414,14 @@ final class ReminderScheduler: ObservableObject {
     /// How a reminder's popup went: ignored (timed out while you were busy)
     /// counts up; sent off (clicked) resets. Faded while you were away: no change.
     func popupOutcome(itemID: UUID, ignored wasIgnored: Bool) {
+        let title = ((try? modelContext?.fetch(FetchDescriptor<Item>())) ?? [])
+            .first { $0.id == itemID }?.title ?? "Reminder"
         if wasIgnored {
             ignored.value.ignored(itemID)
+            DeliveryLog.record(.missed, title: title, at: clock(), detail: "Went by unanswered")
         } else {
             ignored.value.answered(itemID)
+            DeliveryLog.record(.acknowledged, title: title, at: clock(), detail: "Clicked the popup")
         }
     }
 
@@ -492,6 +501,9 @@ final class ReminderScheduler: ObservableObject {
     }
 
     private func present(_ occurrence: Occurrence) {
+        if let title = occurrence.item?.title {
+            DeliveryLog.record(.shown, title: title, at: clock())
+        }
         activeOccurrence = occurrence
         isLiveReminderSuspended = false
         presenter.presentLiveReminder()
@@ -550,6 +562,9 @@ final class ReminderScheduler: ObservableObject {
     private func finalizeUnfinished(_ occurrence: Occurrence) {
         occurrence.status = .unfinished
         occurrence.nextEscalationAt = nil
+        if let title = occurrence.item?.title {
+            DeliveryLog.record(.unfinished, title: title, at: clock())
+        }
         // Left unanswered through every nag: that's ignoring it.
         if let id = occurrence.item?.id { ignored.value.ignored(id) }
     }
@@ -614,6 +629,10 @@ final class ReminderScheduler: ObservableObject {
     private func resolve(status: OccurrenceStatus) {
         guard let occurrence = activeOccurrence else { return }
         let before = OccurrenceActions.Snapshot(occurrence)
+        if let title = occurrence.item?.title {
+            DeliveryLog.record(.acknowledged, title: title, at: clock(),
+                               detail: status == .done ? "Done" : "Skipped")
+        }
         occurrence.status = status
         occurrence.resolvedAt = clock()
         occurrence.nextEscalationAt = nil

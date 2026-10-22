@@ -19,6 +19,8 @@ struct SmartSettingsView: View {
     @State private var newCategory = ""
     @State private var restoreResult: String?
 
+    @ObservedObject private var deliveries = DeliveryLog.store
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             loginSection
@@ -44,6 +46,8 @@ struct SmartSettingsView: View {
             renderSection
             Divider()
             backupSection
+            Divider()
+            deliverySection
             Divider()
             categoriesSection
         }
@@ -160,6 +164,40 @@ struct SmartSettingsView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
+    }
+
+    // MARK: - Delivery log
+
+    private var deliverySection: some View {
+        Text("Recent deliveries").font(.headline)
+        let recent = Array(deliveries.value.entries.prefix(20))
+        if recent.isEmpty {
+            Text("Nothing yet. Each reminder shows up here as it comes due, appears on screen, is answered or is missed.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            ForEach(recent) { entry in
+                HStack(spacing: 8) {
+                    Text(entry.at, format: .dateTime.day().month().hour().minute())
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Text(entry.step.label)
+                        .font(.caption.weight(.semibold))
+                    Text(entry.title)
+                        .font(.caption)
+                        .lineLimit(1)
+                    if let detail = entry.detail {
+                        Text(detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            Button("Clear the log") { deliveries.value.entries = [] }
+                .controlSize(.small)
+        }
     }
 
     // MARK: - Menu bar face
