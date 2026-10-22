@@ -640,8 +640,9 @@ struct ExpandedPanelView: View {
     private func saveConfirmed() {
         guard let pending = draft.preview else { return }
         if let timer = pending.timer, draft.chosen == nil {
-            // "choosing music within 30 min": counts down in the Timers section.
+            // "choosing music within 30 min": counts down at the notch and in the Timers section.
             TaskTimers.start(timer, category: pending.category)
+            ReminderScheduler.shared.timersChanged()
         } else if let cycle = pending.breakCycle {
             // A break timer isn't a routine: it starts the menu bar countdown
             // and shows in the list's "Break timer" section.

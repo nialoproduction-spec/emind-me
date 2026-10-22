@@ -5,7 +5,7 @@ import Foundation
 /// Kept apart from SwiftData, so its states never touch the reminder rules.
 struct TaskTimers: Codable, Equatable {
     enum State: String, Codable, Equatable {
-        case running, asking, overdue, done
+        case running, asking, overdue, done, queued
     }
 
     struct Entry: Codable, Equatable, Identifiable {
@@ -36,8 +36,16 @@ struct TaskTimers: Codable, Equatable {
 
     var open: [Entry] { entries.filter { $0.state != .done } }
 
+    /// The timer on the notch now: the first that isn't finished or waiting.
+    var current: Entry? {
+        entries.first { $0.state == .running || $0.state == .asking || $0.state == .overdue }
+    }
+
+    /// Timers run one after another. A new one waits behind any that's still going.
     mutating func start(title: String, category: String?, seconds: Double, at now: Date) {
-        entries.insert(Entry(title: title, category: category, seconds: seconds, startedAt: now), at: 0)
+        let busy = current != nil
+        entries.insert(Entry(title: title, category: category, seconds: seconds, startedAt: now,
+                             state: busy ? .queued : .running), at: 0)
         let finished = entries.filter { $0.state == .done }
         if finished.count > Self.keepFinished, let oldest = finished.last {
             entries.removeAll { $0.id == oldest.id }
@@ -63,9 +71,13 @@ struct TaskTimers: Codable, Equatable {
         return result
     }
 
-    mutating func markDone(_ id: UUID) {
+    /// Done: the oldest queued timer starts now.
+    mutating func markDone(_ id: UUID, now: Date = .now) {
         guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
         entries[index].state = .done
+        guard current == nil, let next = entries.lastIndex(where: { $0.state == .queued }) else { return }
+        entries[next].state = .running
+        entries[next].startedAt = now
     }
 
     /// "Not yet": it keeps counting on, now in red.
@@ -95,7 +107,7 @@ struct TaskTimers: Codable, Equatable {
     @MainActor
     static func markDone(_ id: UUID) {
         var timers = store.value
-        timers.markDone(id)
+        timers.markDone(id, now: .now)
         store.value = timers
     }
 

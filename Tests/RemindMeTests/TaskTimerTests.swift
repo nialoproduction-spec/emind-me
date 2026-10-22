@@ -70,4 +70,23 @@ final class TaskTimerTests: XCTestCase {
         XCTAssertEqual(TaskTimers.clock(3725), "1:02:05")
         XCTAssertEqual(TaskTimers.clock(-3), "0:00")
     }
+
+    func testTimersRunOneAfterAnother() {
+        var timers = TaskTimers()
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        timers.start(title: "Select sound", category: nil, seconds: 1200, at: t0)
+        timers.start(title: "Edit video", category: "Editing", seconds: 1200, at: t0)
+        let first = timers.entries.last!
+        let second = timers.entries.first!
+        XCTAssertEqual(first.state, .running)
+        XCTAssertEqual(second.state, .queued)
+        XCTAssertEqual(timers.current?.id, first.id)
+
+        let later = t0.addingTimeInterval(1200)
+        _ = timers.advance(now: later)
+        timers.markDone(first.id, now: later)
+        XCTAssertEqual(timers.current?.id, second.id, "the next one is on the notch now")
+        XCTAssertEqual(timers.entries.first { $0.id == second.id }?.startedAt, later)
+        XCTAssertEqual(timers.entries.first { $0.id == second.id }?.state, .running)
+    }
 }

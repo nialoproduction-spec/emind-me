@@ -39,13 +39,15 @@ private struct TaskTimerRow: View {
                     .foregroundStyle(theme.text.opacity(0.6))
             case .asking:
                 Text("Time's up").foregroundStyle(.red)
-                Button("Done") { TaskTimers.markDone(entry.id) }
+                Button("Done") { TaskTimers.markDone(entry.id); ReminderScheduler.shared.timersChanged() }
                 Button("Not yet") { TaskTimers.notYet(entry.id) }
             case .overdue:
                 Text("+" + TaskTimers.clock(now.timeIntervalSince(entry.endsAt)))
                     .monospacedDigit()
                     .foregroundStyle(.red)
-                Button("Done") { TaskTimers.markDone(entry.id) }
+                Button("Done") { TaskTimers.markDone(entry.id); ReminderScheduler.shared.timersChanged() }
+            case .queued:
+                Text("Next up").foregroundStyle(theme.text.opacity(0.5))
             case .done:
                 EmptyView()
             }

@@ -75,6 +75,8 @@ final class ReminderScheduler: ObservableObject {
     private var tickTimer: Timer?
     private var wakeObservers: [NSObjectProtocol] = []
     private var wakeCatchUp: Task<Void, Never>?
+    /// The timer last shown at the notch (id and state), so it's only redrawn on change.
+    private var shownTimerKey: String?
     /// When the last check ran; a long gap means the Mac was asleep or off.
     private var lastTickAt: Date?
     private var spaceObserver: NSObjectProtocol?
@@ -388,20 +390,59 @@ final class ReminderScheduler: ObservableObject {
 
     // MARK: - Task timers
 
-    /// At zero, a popup asks whether the task is done. If nobody answers for a
-    /// minute, the timer turns red in the list and counts on past its time.
+    /// Called after a timer is answered or started, so the notch and the list
+    /// catch up at once instead of on the next tick.
+    func timersChanged() {
+        checkTimers(now: clock())
+    }
+
+    /// At zero, a popup asks whether the task is done, and the panel opens
+    /// with Done and Not yet. If nobody answers for a minute, the timer turns red.
     private func checkTimers(now: Date) {
         var timers = TaskTimers.store.value
         let changes = timers.advance(now: now)
-        guard !changes.isEmpty else { return }
-        TaskTimers.store.value = timers
+        if !changes.isEmpty { TaskTimers.store.value = timers }
         for entry in changes.asking {
             DeliveryLog.record(.shown, title: entry.title, at: now, detail: "Time's up")
             showNotice(Self.popupContent(title: "\(entry.title): time's up",
                                          quote: "Done with it?", settings: popupSettings.value))
+            let panel = ReminderPanelController.shared
+            panel.show()
+            panel.setExpanded(true)
+            panel.keepOpenUntilClickAway()
         }
         for entry in changes.overdue {
             DeliveryLog.record(.missed, title: entry.title, at: now, detail: "No answer; counting on")
+        }
+        showTimerAtNotch()
+    }
+
+    /// The running timer at the notch: a countdown, then "done?", then red and counting up.
+    private func showTimerAtNotch() {
+        guard let entry = TaskTimers.store.value.current else {
+            if shownTimerKey != nil {
+                shownTimerKey = nil
+                BreakIslandController.shared.hide()
+            }
+            return
+        }
+        let key = "\(entry.id)-\(entry.state.rawValue)"
+        guard key != shownTimerKey else { return }
+        shownTimerKey = key
+        BreakIslandController.shared.show(Self.timerNotice(for: entry))
+    }
+
+    nonisolated static func timerNotice(for entry: TaskTimers.Entry) -> NoticeContent {
+        switch entry.state {
+        case .asking:
+            return NoticeContent(title: "\(entry.title): done?", detail: "Time's up",
+                                 face: .furious, tone: .away, sticky: true)
+        case .overdue:
+            return NoticeContent(title: entry.title, countUpFrom: entry.endsAt,
+                                 face: .furious, tone: .away, sticky: true)
+        default:
+            return NoticeContent(title: entry.title, countdownTo: entry.endsAt,
+                                 face: .smug, tone: .work, sticky: true)
         }
     }
 
