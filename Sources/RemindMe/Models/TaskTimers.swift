@@ -152,6 +152,32 @@ extension TimerRequest {
         return TimerRequest(title: title, seconds: seconds, category: category(for: title))
     }
 
+    /// Several timers in one line: "edit song 2 min, write 3 song", split on
+    /// commas, periods, " - " or " and ". Every part must be a timer, or the
+    /// whole line is left to the normal parser (returns []).
+    static func parseAll(_ text: String) -> [TimerRequest] {
+        let ns = text as NSString
+        var pieces: [String] = []
+        var last = 0
+        for match in splitRegex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            pieces.append(ns.substring(with: NSRange(location: last, length: match.range.location - last)))
+            last = match.range.location + match.range.length
+        }
+        pieces.append(ns.substring(from: last))
+        let cleaned = pieces.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard cleaned.count > 1 else { return [] }
+        var requests: [TimerRequest] = []
+        for piece in cleaned {
+            guard let request = parse(piece) else { return [] }
+            requests.append(request)
+        }
+        return requests
+    }
+
+    private static let splitRegex = try! NSRegularExpression(
+        pattern: #"\s*(?:,|\.(?=\s|$)|\s-\s|\s+and\s+)\s*"#,
+        options: [.caseInsensitive])
+
     private static let timerRegex = try! NSRegularExpression(
         pattern: #"^\s*(?<task>.*?[a-z].*?)\s+(?:with\s+)?(?:(?<prep>within|in|for)\s+)?(?<qty>\d+(?:\.\d+)?)\s*(?<unit>minutes?|mins?|hours?|hrs?)\s*$"#,
         options: [.caseInsensitive])

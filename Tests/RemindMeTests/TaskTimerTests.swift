@@ -89,4 +89,17 @@ final class TaskTimerTests: XCTestCase {
         XCTAssertEqual(timers.entries.first { $0.id == second.id }?.startedAt, later)
         XCTAssertEqual(timers.entries.first { $0.id == second.id }?.state, .running)
     }
+
+    func testOneLineSplitsIntoSeparateTimers() {
+        let parts = TimerRequest.parseAll("edit song 2 min , write 3 song")
+        XCTAssertEqual(parts.map(\.seconds), [120, 180])
+        XCTAssertEqual(TimerRequest.parseAll("select sound within 20 min. edit video 20 min").count, 2)
+        XCTAssertEqual(TimerRequest.parseAll("color grade 20 min - export 10 min and rest 5 min").count, 3)
+    }
+
+    func testSplittingKeepsDecimalsAndSingleTasksWhole() {
+        XCTAssertEqual(TimerRequest.parseAll("sound and light 10 min"), [])
+        XCTAssertEqual(TimerRequest.parseAll("edit 1.5 min").count, 0)
+        XCTAssertEqual(TimerRequest.parseAll("edit video 1.5 min, write 2 min").map(\.seconds), [90, 120])
+    }
 }

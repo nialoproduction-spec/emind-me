@@ -27,6 +27,8 @@ struct ParsedItem {
     var dueDate: Date? = nil
     /// "choosing music within 30 min": a timer that counts down in the list.
     var timer: TimerRequest? = nil
+    /// Every timer in the line, in order ("edit 2 min, write 3 song"). `timer` is the first.
+    var timers: [TimerRequest] = []
 
     /// Has a time or interval, so it can be a reminder or a habit.
     var hasSchedule: Bool { kind != .goal }
@@ -122,12 +124,16 @@ enum ItemParser {
             }
         }
         // "choosing music within 30 min": a timer, not a reminder or a goal.
-        if !askedToRemind, let request = TimerRequest.parse(withoutTags) {
-            var timer = ParsedItem(kind: .goal, title: request.title, intervalSeconds: nil, hour: nil,
-                                   minute: nil, weekdays: [], targetDate: nil)
-            timer.category = category ?? request.category
-            timer.timer = request
-            return timer
+        if !askedToRemind {
+            let requests = TimerRequest.parseAll(withoutTags)
+            if let request = requests.first ?? TimerRequest.parse(withoutTags) {
+                var timer = ParsedItem(kind: .goal, title: request.title, intervalSeconds: nil, hour: nil,
+                                       minute: nil, weekdays: [], targetDate: nil)
+                timer.category = category ?? request.category
+                timer.timer = request
+                timer.timers = requests.isEmpty ? [request] : requests
+                return timer
+            }
         }
         var parsed = parseSchedule(withoutTags, now: now, calendar: calendar, askedToRemind: askedToRemind)
         parsed.category = category
