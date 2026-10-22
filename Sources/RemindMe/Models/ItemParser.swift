@@ -25,6 +25,8 @@ struct ParsedItem {
     var yearMonth: Int? = nil
     /// Deadline ("Sharma teaser due Nov 10"): nudges 7, 3, 1 day before.
     var dueDate: Date? = nil
+    /// "choosing music within 30 min": a timer that counts down in the list.
+    var timer: TimerRequest? = nil
 
     /// Has a time or interval, so it can be a reminder or a habit.
     var hasSchedule: Bool { kind != .goal }
@@ -33,11 +35,15 @@ struct ParsedItem {
     /// reminder (the quiet one); text without starts out as a goal.
     var type: ItemType {
         if let chosen, chosen == .goal || hasSchedule { return chosen }
+        if timer != nil { return .reminder }
         return hasSchedule ? .reminder : .goal
     }
 
     /// Schedule description for the confirmation banner (title shown separately).
     var detailLine: String {
+        if let timer {
+            return "Timer · \(Int((timer.seconds / 60).rounded())) min"
+        }
         if let breakCycle {
             return "\(BreakCycleConfig.short(breakCycle.breakSeconds)) break · repeats until you turn it off"
         }
@@ -114,6 +120,14 @@ enum ItemParser {
                 cycle.title = "Rest every \(BreakCycleConfig.short(config.workSeconds))"
                 return cycle
             }
+        }
+        // "choosing music within 30 min": a timer, not a reminder or a goal.
+        if !askedToRemind, let request = TimerRequest.parse(withoutTags) {
+            var timer = ParsedItem(kind: .goal, title: request.title, intervalSeconds: nil, hour: nil,
+                                   minute: nil, weekdays: [], targetDate: nil)
+            timer.category = category ?? request.category
+            timer.timer = request
+            return timer
         }
         var parsed = parseSchedule(withoutTags, now: now, calendar: calendar, askedToRemind: askedToRemind)
         parsed.category = category

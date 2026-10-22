@@ -293,6 +293,7 @@ final class ReminderScheduler: ObservableObject {
             }
         }
 
+        checkTimers(now: now)
         checkMissed(held: suppressed || away)
         checkGoalNudge(now: now, items: items, occurrences: allOccurrences, held: suppressed || away)
         checkEndOfDay(now: now)
@@ -383,6 +384,25 @@ final class ReminderScheduler: ObservableObject {
 
     nonisolated static func loudLine(times: Int) -> String {
         "Ignored \(times) times. Look at me!"
+    }
+
+    // MARK: - Task timers
+
+    /// At zero, a popup asks whether the task is done. If nobody answers for a
+    /// minute, the timer turns red in the list and counts on past its time.
+    private func checkTimers(now: Date) {
+        var timers = TaskTimers.store.value
+        let changes = timers.advance(now: now)
+        guard !changes.isEmpty else { return }
+        TaskTimers.store.value = timers
+        for entry in changes.asking {
+            DeliveryLog.record(.shown, title: entry.title, at: now, detail: "Time's up")
+            showNotice(Self.popupContent(title: "\(entry.title): time's up",
+                                         quote: "Done with it?", settings: popupSettings.value))
+        }
+        for entry in changes.overdue {
+            DeliveryLog.record(.missed, title: entry.title, at: now, detail: "No answer; counting on")
+        }
     }
 
     // MARK: - Missed while away

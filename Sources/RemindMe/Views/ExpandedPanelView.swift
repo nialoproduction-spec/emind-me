@@ -283,6 +283,7 @@ struct ExpandedPanelView: View {
             if categoryFilter == nil {
                 BreakTimerSection(theme: theme)
             }
+            TaskTimersSection(theme: theme)
             if !deadlines.isEmpty {
                 Section("Deadlines") {
                     ForEach(deadlines) { item in itemRow(item) }
@@ -635,7 +636,10 @@ struct ExpandedPanelView: View {
 
     private func saveConfirmed() {
         guard let pending = draft.preview else { return }
-        if let cycle = pending.breakCycle {
+        if let timer = pending.timer {
+            // "choosing music within 30 min": counts down in the Timers section.
+            TaskTimers.start(timer, category: pending.category)
+        } else if let cycle = pending.breakCycle {
             // A break timer isn't a routine: it starts the menu bar countdown
             // and shows in the list's "Break timer" section.
             BreakCycleManager.shared.startCycle(cycle)
