@@ -130,6 +130,10 @@ extension TimerRequest {
         guard let quantity = ItemParser.parseQuantity(ns.substring(with: match.range(withName: "qty"))),
               quantity > 0 else { return nil }
         let unit = ns.substring(with: match.range(withName: "unit")).lowercased()
+        // "in 2 hours" on its own is a one-time reminder, not a timer.
+        let prepRange = match.range(withName: "prep")
+        let prep = prepRange.location == NSNotFound ? "" : ns.substring(with: prepRange).lowercased()
+        if prep == "in", unit.hasPrefix("h") { return nil }
         let seconds = quantity * ItemParser.unitSeconds(unit)
 
         let title = rawTask.prefix(1).uppercased() + rawTask.dropFirst()
@@ -137,7 +141,7 @@ extension TimerRequest {
     }
 
     private static let timerRegex = try! NSRegularExpression(
-        pattern: #"^\s*(?<task>.*?[a-z].*?)\s+(?:with\s+)?(?:(?:within|in|for)\s+)?(?<qty>\d+(?:\.\d+)?)\s*(?<unit>minutes?|mins?|m|hours?|hrs?|h)\s*$"#,
+        pattern: #"^\s*(?<task>.*?[a-z].*?)\s+(?:with\s+)?(?:(?<prep>within|in|for)\s+)?(?<qty>\d+(?:\.\d+)?)\s*(?<unit>minutes?|mins?|hours?|hrs?)\s*$"#,
         options: [.caseInsensitive])
 
     /// A category from the task's words, so "editing" and "color grading" group together.
