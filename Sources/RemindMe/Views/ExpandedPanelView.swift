@@ -39,6 +39,7 @@ struct ExpandedPanelView: View {
     @Environment(\.modelContext) private var modelContext
     @ObservedObject private var draft = PanelDraft.shared
     @ObservedObject private var voice = VoiceInput.shared
+    @ObservedObject private var timers = TaskTimers.store
     @ObservedObject private var smart = AppSettings.smart
     @ObservedObject private var undo = UndoCenter.shared
     @FocusState private var fieldFocused: Bool
@@ -219,7 +220,8 @@ struct ExpandedPanelView: View {
                 Divider().opacity(0.1)
             }
 
-            if items.isEmpty && BreakCycleManager.shared.config == nil {
+            // A running timer counts as content, so the list shows instead of the empty state.
+            if items.isEmpty && BreakCycleManager.shared.config == nil && timers.value.open.isEmpty {
                 emptyState
             } else {
                 list
@@ -317,6 +319,7 @@ struct ExpandedPanelView: View {
                 }
             }
             if goals.isEmpty && habits.isEmpty && reminders.isEmpty && deadlines.isEmpty && sortedToday.isEmpty
+                && timers.value.open.isEmpty
                 && (categoryFilter != nil || BreakCycleManager.shared.config == nil) {
                 Text("Nothing in this category yet.")
                     .font(theme.font)
