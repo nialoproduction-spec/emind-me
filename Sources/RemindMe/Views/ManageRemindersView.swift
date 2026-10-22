@@ -11,10 +11,12 @@ struct ManageRemindersView: View {
     @State private var pendingDeletion: Item?
 
     /// Active first (running routines, open goals), then paused / achieved.
-    private var activeRoutines: [Item] { items.filter { $0.kind != .goal && $0.isActive } }
+    private var activeRoutines: [Item] { items.filter { $0.kind != .goal && $0.isActive && !$0.isOver } }
     private var openGoals: [Item] { items.filter { $0.kind == .goal && !$0.isAchieved } }
+    /// Paused, achieved, and finished ones (one-time reminders that have
+    /// fired, delivered deadlines), so they can still be deleted for good.
     private var inactive: [Item] {
-        items.filter { $0.kind == .goal ? $0.isAchieved : !$0.isActive }
+        items.filter { $0.kind == .goal ? $0.isAchieved : (!$0.isActive || $0.isOver) }
     }
 
     var body: some View {
@@ -27,7 +29,7 @@ struct ManageRemindersView: View {
                 group("Routines", activeRoutines, empty: "No active routines.")
                 group("Goals", openGoals, empty: "No open goals.")
                 if !inactive.isEmpty {
-                    group("Paused & achieved", inactive, empty: "")
+                    group("Paused, achieved & finished", inactive, empty: "")
                 }
             }
         }

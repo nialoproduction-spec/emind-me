@@ -336,6 +336,58 @@ final class UIPreviewTests: XCTestCase {
         try save(sheet, as: "preview-10-history-and-weekly.png")
     }
 
+    /// Deadlines, one-time, monthly and yearly rows; "You missed"; the loud
+    /// popup and the render ping.
+    func testRenderDatesMissedAndLoud() throws {
+        try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
+        let (container, _, _) = try sampleData()
+        let context = container.mainContext
+        let teaser = Item(from: ItemParser.parse("Sharma teaser due Nov 10 #work"))
+        let album = Item(from: ItemParser.parse("Rai wedding album deadline Dec 2"))
+        let once = Item(from: ItemParser.parse("call client tomorrow 3pm"))
+        let rent = Item(from: ItemParser.parse("pay rent on the 1st #home"))
+        let anniversary = Item(from: ItemParser.parse("anniversary every Mar 12"))
+        [teaser, album, once, rent, anniversary].forEach { context.insert($0) }
+        try context.save()
+
+        let rows = panel(width: 340) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("DEADLINES").font(.system(size: 10, weight: .semibold)).foregroundStyle(.gray)
+                ReminderRowView(item: teaser, theme: theme, onToggle: {})
+                ReminderRowView(item: album, theme: theme, onToggle: {})
+                Text("REMINDERS").font(.system(size: 10, weight: .semibold)).foregroundStyle(.gray)
+                ReminderRowView(item: once, theme: theme, onToggle: {})
+                ReminderRowView(item: rent, theme: theme, onToggle: {})
+                ReminderRowView(item: anniversary, theme: theme, onToggle: {})
+            }
+            .padding(14)
+        }
+        let now = Date()
+        let missed = panel(width: 340, height: 330) {
+            MissedView(entries: [
+                MissedList.Entry(title: "Msg wife", dueAt: now.addingTimeInterval(-3 * 3600)),
+                MissedList.Entry(title: "Drink water", dueAt: now.addingTimeInterval(-5 * 3600), count: 7),
+                MissedList.Entry(title: "Sharma teaser", dueAt: now.addingTimeInterval(-2 * 3600),
+                                 detail: "Due in 3 days · Tue, Nov 10"),
+                MissedList.Entry(title: "Render done", dueAt: now.addingTimeInterval(-1800),
+                                 detail: "Sharma_Teaser_v3.mov"),
+            ], theme: theme, now: now)
+        }
+        let size = NoticePillController.size
+        let popups = VStack(spacing: 10) {
+            NoticePillView(content: NoticeContent(title: "Drink water", detail: ReminderScheduler.loudLine(times: 3),
+                                                  sticky: true, loud: true), life: PopupLife())
+                .frame(width: size.width, height: size.height)
+            NoticePillView(content: NoticeContent(title: "Render done", detail: "Sharma_Teaser_v3.mov",
+                                                  duration: 20, mood: .done, plainDetail: true), life: PopupLife())
+                .frame(width: size.width, height: size.height)
+        }
+        .padding(10)
+        .background(Color(white: 0.5))
+        let sheet = HStack(alignment: .top, spacing: 0) { rows; missed; popups }
+        try save(sheet, as: "preview-15-dates-missed-loud.png")
+    }
+
     func testRenderEditScreen() throws {
         try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
         let (container, items, _) = try sampleData()
@@ -348,5 +400,189 @@ final class UIPreviewTests: XCTestCase {
             panel(width: 340, height: 480) { SmartSettingsView().padding(14).environment(\.colorScheme, .dark) }
         }
         try save(sheet, as: "preview-11-edit-and-smart-settings.png")
+    }
+
+    // MARK: - Notch island, type picker, reminder popup
+
+    /// One island state on a dark "menu bar" with a stand-in for the camera
+    /// notch, the way it looks on a MacBook.
+    private func island(_ content: NoticeContent, settings: BreakTimerSettings = BreakTimerSettings()) -> some View {
+        let model = IslandModel()
+        // A 16-inch MacBook Pro's notch.
+        model.notch = IslandGeometry.notch(CGSize(width: 200, height: 37))
+        model.content = content
+        model.palette = BreakIslandRules.palette(for: content.tone ?? .work, settings: settings)
+        model.layout = settings.layout
+        let sides = BreakIslandController.sides(for: content, layout: settings.layout)
+        model.leftWing = sides.left
+        model.rightWing = sides.right
+        model.roomLeft = sides.left
+        model.isOpen = true
+        let width = sides.left + model.notch.middleWidth + sides.right
+        return ZStack(alignment: .top) {
+            LinearGradient(colors: [Color(red: 0.13, green: 0.15, blue: 0.22), Color(red: 0.05, green: 0.05, blue: 0.08)],
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+            IslandView(model: model)
+                .frame(width: width, height: 37 + settings.layout.drop)
+                .offset(x: (sides.right - sides.left) / 2) // puts the notch's middle at the centre
+            UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 9, bottomTrailingRadius: 9,
+                                   topTrailingRadius: 0, style: .continuous)
+                .fill(Color.black)
+                .frame(width: model.notch.middleWidth, height: 37)
+        }
+        .frame(width: 560, height: 60 + settings.layout.drop)
+    }
+
+    func testRenderNotchIsland() throws {
+        try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
+        let now = Date()
+        let states = VStack(spacing: 0) {
+            // Between moments: face and time only.
+            island(NoticeContent(title: "", countdownTo: now.addingTimeInterval(38 * 60 + 12),
+                                 face: .smug, tone: .work, sticky: true))
+            island(NoticeContent(title: "", countdownTo: now.addingTimeInterval(8 * 60 + 54),
+                                 face: .sleepy, tone: .onBreak, sticky: true))
+            // The moments, with words.
+            island(NoticeContent(title: "Working", countdownTo: now.addingTimeInterval(38 * 60 + 12),
+                                 face: .smug, tone: .work, sticky: true))
+            island(NoticeContent(title: "Work ends in", countdownTo: now.addingTimeInterval(7),
+                                 face: .smug, tone: .work, sticky: true, secondsOnly: true))
+            island(NoticeContent(title: "Break", countdownTo: now.addingTimeInterval(8 * 60 + 54),
+                                 face: .sleepy, tone: .onBreak, sticky: true))
+            island(NoticeContent(title: "Break", countdownTo: now.addingTimeInterval(8 * 60 + 54),
+                                 face: .sleepy, tone: .onBreak, sticky: true),
+                   settings: { var s = BreakTimerSettings(); s.breakColor = .awayRed; return s }())
+            island(NoticeContent(title: "Come back!", countUpFrom: now.addingTimeInterval(-192),
+                                 face: .furious, tone: .away, sticky: true))
+            // Customised in Settings: bigger face moved out and down, big z's,
+            // bigger time, reaching 10 pt below the notch.
+            island(NoticeContent(title: "", countdownTo: now.addingTimeInterval(8 * 60 + 54),
+                                 face: .sleepy, tone: .onBreak, sticky: true),
+                   settings: {
+                       var s = BreakTimerSettings()
+                       s.layout.face = IslandLayout.Spot(x: -14, y: 4, size: 1.4)
+                       s.layout.zees = IslandLayout.Spot(x: 4, y: -2, size: 1.6)
+                       s.layout.time = IslandLayout.Spot(x: 6, y: 4, size: 1.3)
+                       s.layout.drop = 10
+                       return s
+                   }())
+        }
+        try save(states, as: "preview-notch-island.png")
+    }
+
+    /// Settings' notch editor (default layout, face picked).
+    func testRenderNotchLayoutEditor() throws {
+        try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
+        let view = IslandLayoutEditor()
+            .frame(width: 300)
+            .padding(20)
+            .background(Color(white: 0.16))
+            .environment(\.colorScheme, .dark)
+        try save(view, as: "preview-notch-layout-editor.png")
+    }
+
+    /// The whole Smart settings tab at the sheet's real width (340 with 20
+    /// padding), at full length, to catch anything running off the edges.
+    func testRenderSmartSettingsFull() throws {
+        try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
+        let view = SmartSettingsView()
+            .frame(width: 300)
+            .padding(20)
+            .frame(width: 340)
+            .background(Color(white: 0.16))
+            .environment(\.colorScheme, .dark)
+        try save(view, as: "preview-12-smart-settings-full.png")
+    }
+
+    /// The menu bar face awake (the original faces), looking at the pointer
+    /// in different places.
+    func testRenderWatchingFace() throws {
+        try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
+        let looks: [(String, Face, CGVector)] = [
+            ("waking", .surprisedKiss, CGVector(dx: 0, dy: 1)),
+            ("down", .owo, CGVector(dx: 0, dy: 1)),
+            ("left", .owo, CGVector(dx: -1, dy: 0.3)),
+            ("right", .owo, CGVector(dx: 1, dy: 0.3)),
+            ("down-left", .owo, CGVector(dx: -0.7, dy: 0.7)),
+            ("blink", .sleepy, .zero),
+            ("shy (close)", .sheepish, CGVector(dx: 0.3, dy: 0.5)),
+        ]
+        let row = HStack(spacing: 14) {
+            ForEach(looks, id: \.0) { name, face, look in
+                VStack(spacing: 4) {
+                    Image(nsImage: MenuBarFace.watchingImage(face, look: look))
+                        .renderingMode(.template)
+                        .resizable()
+                        .frame(width: 38 * 3, height: 20 * 3)
+                        .foregroundStyle(.white)
+                    Text(name).font(.caption).foregroundStyle(.white.opacity(0.6))
+                }
+            }
+        }
+        .padding(16)
+        .background(Color.black)
+        try save(row, as: "preview-14-watching-face.png")
+    }
+
+    func testRenderTypePicker() throws {
+        try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
+        func row(_ text: String, chosen: ItemType? = nil) -> some View {
+            var parsed: ParsedItem? = text.isEmpty ? nil : ItemParser.parse(text)
+            parsed?.chosen = chosen
+            return HStack(spacing: 8) {
+                Text(text.isEmpty ? "Drink water every 40 min" : text)
+                    .font(theme.font)
+                    .foregroundStyle(theme.text.opacity(text.isEmpty ? 0.35 : 1))
+                Spacer()
+                TypePicker(preview: parsed, theme: theme)
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(parsed == nil ? theme.text.opacity(0.25) : ReminderRowView.onColor)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(width: ReminderPanelController.expandedSize.width)
+            .background(theme.background.opacity(theme.backgroundOpacity))
+        }
+        let rows = VStack(spacing: 6) {
+            row("")
+            row("drink water every 1 minute")
+            row("drink water every 1 minute", chosen: .habit)
+            row("finish the Sharma teaser")
+            row("work 40 min rest 10 min")
+        }
+        .padding(10)
+        .background(Color(white: 0.5))
+        try save(rows, as: "preview-type-picker.png")
+    }
+
+    func testRenderReminderPopup() throws {
+        try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
+        let size = NoticePillController.size
+        let content = NoticeContent(title: "Drink water", detail: "Stay hydrated, stay sharp.")
+        let stages: [NoticePillView.Stage] = [
+            .alive,
+            .parting(.dismissed, "Tell my family I loved them."),
+            .sayonara(.dismissed),
+            .parting(.ignored, "Ignored again…"),
+            .sayonara(.ignored),
+        ]
+        let popup = VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                ForEach(0..<3, id: \.self) { index in
+                    NoticePillView(content: content, life: PopupLife(), stage: stages[index])
+                        .frame(width: size.width, height: size.height)
+                }
+            }
+            HStack(spacing: 10) {
+                ForEach(3..<5, id: \.self) { index in
+                    NoticePillView(content: content, life: PopupLife(), stage: stages[index])
+                        .frame(width: size.width, height: size.height)
+                }
+            }
+        }
+        .padding(10)
+        .background(Color(white: 0.5))
+        try save(popup, as: "preview-reminder-popup.png")
     }
 }

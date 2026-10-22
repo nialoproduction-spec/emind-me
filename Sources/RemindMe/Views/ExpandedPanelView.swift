@@ -3,13 +3,25 @@ import SwiftData
 
 /// What's been typed in the panel but not saved yet. Lives outside the view
 /// so it survives the panel fading away and coming back: a half-typed
-/// reminder or a confirmation waiting for Save is still there next time.
+/// reminder is still there next time.
 @MainActor
 final class PanelDraft: ObservableObject {
     static let shared = PanelDraft()
-    @Published var text = ""
-    @Published var pending: ParsedItem?
+    @Published var text = "" {
+        didSet { if text.trimmingCharacters(in: .whitespaces).isEmpty { chosen = nil } }
+    }
+    /// Reminder / Habit / Goal picked in the preview; nil = the default.
+    @Published var chosen: ItemType?
     private init() {}
+
+    /// What Enter would save, shown live above the field while typing.
+    var preview: ParsedItem? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        var parsed = ItemParser.parse(trimmed)
+        parsed.chosen = chosen
+        return parsed
+    }
 }
 
 /// The open panel: goals at the top, reminders (routines) in the middle,
@@ -26,7 +38,10 @@ struct ExpandedPanelView: View {
 
     @Environment(\.modelContext) private var modelContext
     @ObservedObject private var draft = PanelDraft.shared
+    @ObservedObject private var voice = VoiceInput.shared
+    @ObservedObject private var timers = TaskTimers.store
     @ObservedObject private var smart = AppSettings.smart
+    @ObservedObject private var undo = UndoCenter.shared
     @FocusState private var fieldFocused: Bool
 
     /// Inner pages, shown in place of the list.
@@ -60,14 +75,54 @@ struct ExpandedPanelView: View {
             .sorted { $0.isAchieved != $1.isAchieved ? !$0.isAchieved : $0.createdAt > $1.createdAt }
     }
 
-    private var routines: [Item] {
-        items.filter { $0.kind != .goal && matchesFilter($0) }
+    /// Over (a one-time reminder that has fired, a delivered or past
+    /// deadline): gone from the list.
+    private func routines(styled style: ReminderStyle) -> [Item] {
+        items.filter { $0.kind != .goal && $0.style == style && !$0.isOver && $0.dueDate == nil && matchesFilter($0) }
             .sorted { $0.isActive != $1.isActive ? $0.isActive : $0.createdAt > $1.createdAt }
     }
 
+    /// Deadlines still ahead, soonest first.
+    private var deadlines: [Item] {
+        items.filter { $0.kind != .goal && $0.dueDate != nil && !$0.isOver && matchesFilter($0) }
+            .sorted { ($0.dueDate ?? .distantFuture) < ($1.dueDate ?? .distantFuture) }
+    }
+
+    private var habits: [Item] { routines(styled: .habit) }
+    private var reminders: [Item] { routines(styled: .justRemind) }
+
+    /// Today's entries for habits only: a plain reminder has nothing to
+    /// tick off, so it never shows up here (even an old entry from before it
+    /// was switched to a reminder).
     private var sortedToday: [Occurrence] {
-        todayOccurrences.filter { matchesFilter($0.item) }
+        todayOccurrences
+            .filter { ($0.item?.style ?? .habit) == .habit && $0.item?.kind != .goal && matchesFilter($0.item) }
             .sorted { $0.scheduledFireDate < $1.scheduledFireDate }
+    }
+
+    /// The same habit coming due again and again today is one row with a
+    /// count, not a wall of identical lines. Newest group first.
+    struct TodayGroup: Identifiable {
+        let id: String
+        let item: Item?
+        let occurrences: [Occurrence]
+        var doneCount: Int { occurrences.filter { $0.status == .done }.count }
+        var latest: Date { occurrences.map(\.scheduledFireDate).max() ?? .distantPast }
+    }
+
+    private var todayGroups: [TodayGroup] {
+        var order: [String] = []
+        var buckets: [String: [Occurrence]] = [:]
+        var owners: [String: Item?] = [:]
+        for occurrence in sortedToday {
+            let key = occurrence.item.map { "item-\($0.id)" } ?? "entry-\(occurrence.id)"
+            if buckets[key] == nil { order.append(key); owners[key] = .some(occurrence.item) }
+            buckets[key, default: []].append(occurrence)
+        }
+        return order.map { key in
+            TodayGroup(id: key, item: owners[key] ?? nil, occurrences: buckets[key] ?? [])
+        }
+        .sorted { $0.latest > $1.latest }
     }
 
     private var categoriesInUse: [String] {
@@ -87,8 +142,17 @@ struct ExpandedPanelView: View {
     }
 
     private func streak(for item: Item) -> Int {
-        guard item.kind != .goal else { return 0 }
-        return Insights.streak(Insights.dailyRecords(Insights.occurrences(of: item, in: occurrences), days: 60, now: .now))
+        Insights.streak(Insights.dailyRecords(Insights.occurrences(of: item, in: occurrences), days: 60, now: .now))
+    }
+
+    /// Times done, all time. Plain reminders have nothing to count.
+    private func total(for item: Item) -> Int {
+        guard item.style == .habit || item.kind == .goal else { return 0 }
+        return Insights.occurrences(of: item, in: occurrences).filter { $0.status == .done }.count
+    }
+
+    private func doneToday(_ item: Item) -> Bool {
+        GoalCheckIn.todaysAnswer(for: item, in: occurrences, now: .now)?.status == .done
     }
 
     // MARK: - Body
@@ -131,7 +195,7 @@ struct ExpandedPanelView: View {
             case .item(let item):
                 Text(item.kind == .goal
                      ? "This goal will be removed."
-                     : "This reminder and its history will be removed. This can't be undone.")
+                     : "This reminder and its history will be removed. ⌘Z brings it back.")
             case .entry:
                 Text("Removes this entry from today's list. The reminder itself stays.")
             }
@@ -156,7 +220,8 @@ struct ExpandedPanelView: View {
                 Divider().opacity(0.1)
             }
 
-            if items.isEmpty {
+            // A running timer counts as content, so the list shows instead of the empty state.
+            if items.isEmpty && BreakCycleManager.shared.config == nil && timers.value.open.isEmpty {
                 emptyState
             } else {
                 list
@@ -167,34 +232,95 @@ struct ExpandedPanelView: View {
                 suggestionBar(suggestion)
             }
 
-            Divider().opacity(0.15)
-            if let pending = draft.pending {
-                confirmationBar(pending)
+            if let action = undo.available {
                 Divider().opacity(0.15)
+                undoBar(action)
             }
+
+            Divider().opacity(0.15)
             inputRow
         }
+        // ⌘Z: take back the last delete, Done or Skip.
+        .background(
+            Button("Undo") { undo.undoLast() }
+                .keyboardShortcut("z", modifiers: .command)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        )
+    }
+
+    private func undoBar(_ action: UndoCenter.Action) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.uturn.backward.circle.fill")
+                .foregroundStyle(theme.text.opacity(0.6))
+            Text(action.label)
+                .font(.system(size: theme.fontSize - 1))
+                .foregroundStyle(theme.text.opacity(0.8))
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            Button { undo.undoLast() } label: {
+                Text("Undo ⌘Z")
+                    .font(.system(size: theme.fontSize - 2, weight: .semibold))
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 3)
+                    .background(ReminderRowView.onColor.opacity(0.2))
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(ReminderRowView.onColor)
+            Button { undo.clear() } label: {
+                Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(theme.text.opacity(0.4))
+            .help("Keep it")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
     }
 
     private var list: some View {
         List {
+            if categoryFilter == nil {
+                BreakTimerSection(theme: theme)
+            }
+            TaskTimersSection(theme: theme)
+            if !deadlines.isEmpty {
+                Section("Deadlines") {
+                    ForEach(deadlines) { item in itemRow(item) }
+                }
+            }
             if !goals.isEmpty {
                 Section("Goals") {
                     ForEach(goals) { item in itemRow(item) }
                 }
             }
-            if !routines.isEmpty {
+            if !habits.isEmpty {
+                Section("Habits") {
+                    ForEach(habits) { item in itemRow(item) }
+                }
+            }
+            if !reminders.isEmpty {
                 Section("Reminders") {
-                    ForEach(routines) { item in itemRow(item) }
+                    ForEach(reminders) { item in itemRow(item) }
                 }
             }
             if !sortedToday.isEmpty {
                 let done = sortedToday.filter { $0.status == .done }.count
                 Section("Today — \(done) of \(sortedToday.count) done") {
-                    ForEach(sortedToday) { occurrence in checklistRow(occurrence) }
+                    ForEach(todayGroups) { group in
+                        if group.occurrences.count == 1, let occurrence = group.occurrences.first {
+                            checklistRow(occurrence)
+                        } else {
+                            groupRow(group)
+                        }
+                    }
                 }
             }
-            if goals.isEmpty && routines.isEmpty && sortedToday.isEmpty {
+            if goals.isEmpty && habits.isEmpty && reminders.isEmpty && deadlines.isEmpty && sortedToday.isEmpty
+                && timers.value.open.isEmpty
+                && (categoryFilter != nil || BreakCycleManager.shared.config == nil) {
                 Text("Nothing in this category yet.")
                     .font(theme.font)
                     .foregroundStyle(theme.text.opacity(0.5))
@@ -211,7 +337,9 @@ struct ExpandedPanelView: View {
         ReminderRowView(
             item: item,
             theme: theme,
-            streak: streak(for: item),
+            streak: item.style == .justRemind && item.kind != .goal ? 0 : streak(for: item),
+            total: total(for: item),
+            doneToday: item.kind == .goal && doneToday(item),
             onToggle: { toggle(item) },
             onPause: { pause(item, for: $0) }
         )
@@ -230,8 +358,8 @@ struct ExpandedPanelView: View {
         }
         .swipeActions(edge: .leading, allowsFullSwipe: true) {
             if item.kind == .goal {
-                Button { item.isAchieved.toggle() } label: {
-                    Label(item.isAchieved ? "Not yet" : "Achieved", systemImage: "checkmark")
+                Button { toggle(item) } label: {
+                    Label(doneToday(item) ? "Undo" : "Done today", systemImage: "checkmark")
                 }
                 .tint(theme.accent)
             } else if item.isActive {
@@ -253,8 +381,27 @@ struct ExpandedPanelView: View {
     private func itemMenu(_ item: Item) -> some View {
         Button("Edit…") { editing = item }
         if item.kind == .goal {
-            Button(item.isAchieved ? "Mark not achieved" : "Mark achieved") { item.isAchieved.toggle() }
+            if !item.isAchieved {
+                Button("Done today") { GoalCheckIn.answer(item, done: true, now: .now, in: modelContext) }
+                Button("Not today") { GoalCheckIn.answer(item, done: false, now: .now, in: modelContext) }
+            }
+            Button(item.isAchieved ? "Not finished after all" : "Finished for good (stop asking)") { item.isAchieved.toggle() }
+            Button("History & streak") { historyOf = item }
+        } else if item.dueDate != nil {
+            Button("Delivered") { ItemActions.finish(item) }
+            if item.isActive {
+                Button("Stop the nudges") { pause(item, for: .indefinitely) }
+            } else {
+                Button("Nudge me again") { ItemActions.resume(item) }
+            }
         } else {
+            if item.onceAt != nil {
+                Button("Done with it") { ItemActions.finish(item) }
+            }
+            Button(item.style == .habit ? "Make it a Reminder (no buttons)" : "Make it a Habit (tap Done)") {
+                item.style = item.style == .habit ? .justRemind : .habit
+                NotificationService.shared.schedule(for: item)
+            }
             Button("History & streak") { historyOf = item }
             if item.isActive {
                 Menu("Pause") {
@@ -268,6 +415,47 @@ struct ExpandedPanelView: View {
         }
         Divider()
         Button("Delete…", role: .destructive) { pendingDeletion = .item(item) }
+    }
+
+    /// One habit that came due several times today: a single row with the
+    /// count ("×5" when all are done, "3/5" otherwise). Tap for its history.
+    private func groupRow(_ group: TodayGroup) -> some View {
+        let total = group.occurrences.count
+        let allDone = group.doneCount == total
+        return HStack(spacing: 10) {
+            Image(systemName: allDone ? "checkmark.circle.fill" : "circle.lefthalf.filled")
+                .foregroundStyle(allDone ? theme.accent : theme.text.opacity(0.5))
+                .frame(width: 16)
+            Text(group.item?.title ?? "Reminder")
+                .font(theme.font)
+                .foregroundStyle(allDone ? theme.text.opacity(0.5) : theme.text)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            Text(allDone ? "×\(total)" : "\(group.doneCount)/\(total)")
+                .font(.system(size: theme.fontSize - 1, weight: .semibold).monospacedDigit())
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .foregroundStyle(allDone ? theme.accent : theme.text.opacity(0.7))
+                .background((allDone ? theme.accent : theme.text).opacity(0.14))
+                .clipShape(Capsule())
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { if let item = group.item { historyOf = item } }
+        .listRowBackground(Color.clear)
+        .listRowSeparatorTint(Color.white.opacity(0.08))
+        .contextMenu {
+            Button("Mark all done") {
+                for occurrence in group.occurrences where occurrence.status != .done {
+                    OccurrenceActions.set(occurrence, to: .done)
+                }
+            }
+            .disabled(group.doneCount == total)
+            if let item = group.item {
+                Divider()
+                Button("Edit reminder…") { editing = item }
+                Button("History & streak") { historyOf = item }
+            }
+        }
     }
 
     private func checklistRow(_ occurrence: Occurrence) -> some View {
@@ -400,85 +588,34 @@ struct ExpandedPanelView: View {
         .frame(maxWidth: .infinity)
     }
 
-    // MARK: - Confirmation
-
-    private func confirmationBar(_ parsed: ParsedItem) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: confirmationIcon(for: parsed))
-                .foregroundStyle(theme.accent)
-
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    Text("\(parsed.kindLabel) · \(parsed.title)")
-                        .font(theme.font.weight(.semibold))
-                        .foregroundStyle(theme.text)
-                        .lineLimit(1)
-                    if let category = parsed.category {
-                        CategoryTag(name: category, theme: theme)
-                    }
-                }
-                if !parsed.detailLine.isEmpty {
-                    Text(parsed.detailLine)
-                        .font(.system(size: theme.fontSize - 2))
-                        .foregroundStyle(theme.text.opacity(0.6))
-                        .lineLimit(1)
-                }
-            }
-
-            Spacer()
-
-            Button(action: cancelConfirmation) {
-                Image(systemName: "xmark.circle")
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(theme.text.opacity(0.5))
-            .help("Discard")
-
-            Button(action: editConfirmation) {
-                Image(systemName: "pencil.circle")
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(theme.text.opacity(0.5))
-            .help("Edit the text and re-check")
-
-            Button(action: saveConfirmed) {
-                Image(systemName: "checkmark.circle.fill")
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(theme.accent)
-            .help("Save")
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(theme.accent.opacity(0.08))
-    }
-
-    private func confirmationIcon(for parsed: ParsedItem) -> String {
-        if parsed.breakCycle != nil { return "cup.and.saucer" }
-        switch parsed.kind {
-        case .repeatingRoutine: return "repeat"
-        case .scheduledRoutine: return "clock"
-        case .goal: return "flag"
-        }
-    }
-
     // MARK: - Input row
 
     private var inputRow: some View {
         HStack(spacing: 8) {
-            TextField("Drink water every 40 minutes #health", text: $draft.text)
+            if voice.isListening {
+                // Red while Command is held; released to stop.
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.red)
+                    .help("Listening. Let go of the talk key to stop.")
+            }
+            TextField(voice.isListening ? "Listening…" : "Drink water every 40 min", text: $draft.text)
                 .textFieldStyle(.plain)
                 .font(theme.font)
                 .foregroundStyle(theme.text)
                 .focused($fieldFocused)
                 .onSubmit(handleSubmit)
 
+            TypePicker(preview: draft.preview, theme: theme) { draft.chosen = $0 }
+
             Button(action: handleSubmit) {
                 Image(systemName: "arrow.up.circle.fill")
-                    .foregroundStyle(theme.accent)
+                    .font(.system(size: 18))
+                    .foregroundStyle(draft.preview == nil ? theme.text.opacity(0.25) : ReminderRowView.onColor)
             }
             .buttonStyle(.plain)
             .disabled(draft.text.trimmingCharacters(in: .whitespaces).isEmpty)
+            .help("Save (Enter)")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -494,30 +631,36 @@ struct ExpandedPanelView: View {
         }
     }
 
+    /// Enter saves straight away; the preview above the field already showed
+    /// what it will be (and the Reminder / Habit / Goal pick).
     private func handleSubmit() {
-        let trimmed = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        draft.pending = ItemParser.parse(trimmed)
+        saveConfirmed()
     }
 
     private func saveConfirmed() {
-        guard let pending = draft.pending else { return }
-        // A break timer isn't a routine: start the menu bar countdown instead.
-        if let cycle = pending.breakCycle {
+        guard let pending = draft.preview else { return }
+        if let timer = pending.timer, draft.chosen == nil {
+            // "choosing music within 30 min": counts down at the notch and in the Timers section.
+            // Several in one line start in order: the first runs, the rest queue.
+            for request in pending.timers.isEmpty ? [timer] : pending.timers {
+                TaskTimers.start(request, category: pending.category ?? request.category)
+            }
+            ReminderScheduler.shared.timersChanged()
+        } else if let cycle = pending.breakCycle {
+            // A break timer isn't a routine: it starts the menu bar countdown
+            // and shows in the list's "Break timer" section.
             BreakCycleManager.shared.startCycle(cycle)
-            draft.text = ""
-            draft.pending = nil
-            ReminderPanelController.shared.closeAfterAdding()
-            return
+        } else {
+            let item = Item(from: pending)
+            if let category = pending.category { rememberCategory(category) }
+            modelContext.insert(item)
+            NotificationService.shared.schedule(for: item)
         }
-        let item = Item(from: pending)
-        if let category = pending.category { rememberCategory(category) }
-        modelContext.insert(item)
-        NotificationService.shared.schedule(for: item)
         draft.text = ""
-        draft.pending = nil
-        // Added: the panel tucks itself away (after a beat, so the save registers).
-        ReminderPanelController.shared.closeAfterAdding()
+        draft.chosen = nil
+        fieldFocused = true
+        // Added: the panel stays up until the next click elsewhere.
+        ReminderPanelController.shared.keepOpenUntilClickAway()
     }
 
     /// A new #tag joins the category list, so it can be picked when editing.
@@ -527,22 +670,15 @@ struct ExpandedPanelView: View {
         store.value.names.append(name)
     }
 
-    private func cancelConfirmation() {
-        draft.text = ""
-        draft.pending = nil
-        fieldFocused = true
-    }
-
-    /// Dismisses the confirmation but keeps the typed text, so the person
-    /// can tweak it and submit again rather than retyping from scratch.
-    private func editConfirmation() {
-        draft.pending = nil
-        fieldFocused = true
-    }
-
     private func toggle(_ item: Item) {
         if item.kind == .goal {
-            item.isAchieved.toggle()
+            if item.isAchieved {
+                item.isAchieved = false
+            } else if let answer = GoalCheckIn.todaysAnswer(for: item, in: occurrences, now: .now), answer.status == .done {
+                OccurrenceActions.delete(answer, in: modelContext)
+            } else {
+                GoalCheckIn.answer(item, done: true, now: .now, in: modelContext)
+            }
         } else if item.isActive {
             pause(item, for: .indefinitely)
         } else {
@@ -620,5 +756,165 @@ struct SuggestionBar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color.yellow.opacity(0.06))
+    }
+}
+
+/// The break timer as a list row, like any routine: blue bolt while it runs,
+/// grey when off (click to switch), a live "Working · 32:10 left" line, and
+/// right-click / swipe to delete. Its own view so the per-second countdown
+/// only redraws this row, not the whole list.
+struct BreakTimerSection: View {
+    let theme: PanelTheme
+    @ObservedObject private var breaks = BreakCycleManager.shared
+    @ObservedObject private var settings = AppSettings.breakTimer
+
+    var body: some View {
+        if let config = breaks.config {
+            Section("Break timer") {
+                row(config, running: breaks.state)
+            }
+        }
+    }
+
+    private func row(_ config: BreakCycleConfig, running: BreakCycleState?) -> some View {
+        HStack(spacing: 10) {
+            Button { toggle() } label: {
+                Image(systemName: "bolt.circle.fill")
+                    .font(.system(size: theme.fontSize + 3))
+                    .foregroundStyle(running != nil ? ReminderRowView.onColor : theme.text.opacity(0.3))
+            }
+            .buttonStyle(.plain)
+            .help(running != nil ? "Turn off" : "Turn on")
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(config.title)
+                    .font(theme.font)
+                    .foregroundStyle(running != nil ? theme.text : theme.text.opacity(0.4))
+                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    if let running, running.phase == .waiting {
+                        Image(systemName: "moon.zzz.fill")
+                        Text("Break's over · starts when you're back")
+                    } else if let running {
+                        Image(systemName: running.phase == .onBreak ? "cup.and.saucer.fill" : "repeat")
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            let left = BreakCycleState.clockString(running.remaining(at: context.date))
+                            Text(running.phase == .onBreak ? "On break · \(left) left" : "Working · \(left) to break")
+                                .monospacedDigit()
+                        }
+                    } else {
+                        Image(systemName: "pause.fill")
+                        Text("Off")
+                    }
+                }
+                .font(.system(size: theme.fontSize - 2))
+                .foregroundStyle(theme.text.opacity(0.5))
+                .lineLimit(1)
+            }
+            Spacer(minLength: 4)
+
+            // Pin = the work countdown stays at the notch; unpinned it hides
+            // while you work and only peeks at the key moments.
+            Button { settings.value.keepWorkCountdown.toggle() } label: {
+                Image(systemName: settings.value.keepWorkCountdown ? "pin.fill" : "pin.slash")
+                    .font(.system(size: theme.fontSize - 1))
+                    .foregroundStyle(settings.value.keepWorkCountdown ? ReminderRowView.onColor : theme.text.opacity(0.35))
+            }
+            .buttonStyle(.plain)
+            .help(settings.value.keepWorkCountdown
+                  ? "Work countdown stays at the notch. Click to hide it while working."
+                  : "Work countdown hidden while working. Click to keep it at the notch.")
+        }
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .listRowBackground(Color.clear)
+        .listRowSeparatorTint(Color.white.opacity(0.08))
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button { breaks.remove() } label: { Label("Delete", systemImage: "trash") }
+                .tint(.red)
+        }
+        .contextMenu {
+            if running != nil {
+                Button("Turn off") { breaks.stop() }
+                Button("Start over") { breaks.resume() }
+            } else {
+                Button("Turn on") { breaks.resume() }
+            }
+            Button(settings.value.keepWorkCountdown ? "Hide work countdown" : "Keep work countdown at the notch") {
+                settings.value.keepWorkCountdown.toggle()
+            }
+            Divider()
+            Button("Delete", role: .destructive) { breaks.remove() }
+        }
+    }
+
+    private func toggle() {
+        if breaks.isRunning { breaks.stop() } else { breaks.resume() }
+    }
+}
+
+/// Reminder · Habit · Goal as three small icons beside the send arrow. As
+/// you type, the one your text points to lights up blue (a time → Reminder,
+/// no time → Goal); click another to switch, and the rest go grey. Reminder
+/// and Habit need a time in the text. A break timer shows a cup instead.
+struct TypePicker: View {
+    let preview: ParsedItem?
+    let theme: PanelTheme
+    var onPick: (ItemType) -> Void = { _ in }
+
+    var body: some View {
+        HStack(spacing: 1) {
+            if let preview, preview.breakCycle != nil {
+                chip(icon: "cup.and.saucer.fill", lit: true, enabled: true, help: "Break timer") {}
+            } else {
+                ForEach(ItemType.allCases, id: \.self) { type in
+                    let enabled = preview.map { type == .goal || $0.hasSchedule } ?? false
+                    let lit = preview?.type == type && preview?.timer == nil
+                    chip(icon: lit ? Self.filledIcon(type) : type.icon, lit: lit, enabled: enabled,
+                         help: Self.help(type, enabled: enabled)) { onPick(type) }
+                        .keyboardShortcut(type == .habit ? KeyboardShortcut(.return, modifiers: .command) : nil)
+                }
+                // A timer ("drink water within 40 min") has its own button: it counts
+                // down in the Timers section, then asks if it's done.
+                let timing = preview?.timer != nil
+                chip(icon: timing ? "timer.circle.fill" : "timer", lit: timing, enabled: timing,
+                     help: timing ? "Timer: counts down, then asks if it's done"
+                                  : "Timer: add “within 40 min” to the text first") {}
+            }
+        }
+        .padding(2)
+        .background(Capsule().fill(theme.text.opacity(0.07)))
+        .animation(.snappy(duration: 0.18), value: preview?.type)
+    }
+
+    private func chip(icon: String, lit: Bool, enabled: Bool, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 26, height: 22)
+                .foregroundStyle(lit ? ReminderRowView.onColor : theme.text.opacity(enabled ? 0.45 : 0.18))
+                .background(Capsule().fill(lit ? ReminderRowView.onColor.opacity(0.2) : Color.clear))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .help(help)
+    }
+
+    static func filledIcon(_ type: ItemType) -> String {
+        switch type {
+        case .reminder: return "bell.fill"
+        case .habit: return "checkmark.circle.fill"
+        case .goal: return "flag.fill"
+        }
+    }
+
+    static func help(_ type: ItemType, enabled: Bool) -> String {
+        if !enabled { return "\(type.label): add a time first, like “every 2 hours”" }
+        switch type {
+        case .reminder: return "Reminder: just reminds you"
+        case .habit: return "Habit: you tap Done each time (⌘↩)"
+        case .goal: return "Goal: asked about at the evening check-in"
+        }
     }
 }

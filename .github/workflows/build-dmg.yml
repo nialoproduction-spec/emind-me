@@ -16,19 +16,28 @@ permissions:
 
 jobs:
   build:
-    # Apple Silicon runner — build.sh refuses to build on Intel.
-    runs-on: macos-latest
+    # Intel runner, cross-compiling the Apple Silicon app (build.sh passes
+    # --arch arm64). The free Apple Silicon pools (macos-latest, macos-15)
+    # kept cancelling jobs for lack of capacity.
+    runs-on: macos-15-intel
     timeout-minutes: 30
 
     steps:
       - name: Check out code
         uses: actions/checkout@v5
 
+      - name: Use the newest Xcode (26 has Liquid Glass)
+        run: |
+          X=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$X" ]; then sudo xcode-select -s "$X"; fi
+          xcode-select -p
+
       - name: Show toolchain
         run: |
           xcodebuild -version
           swift --version
           uname -m
+          echo "::notice title=Toolchain::$(xcodebuild -version | head -1) / $(swift --version 2>&1 | head -1)"
 
       - name: Run tests
         run: |
@@ -49,21 +58,20 @@ jobs:
             body=$(sed 's/%/%25/g' problems.txt | awk '{printf "%s%%0A", $0}')
             echo "::error title=Test problems::${body}"
           fi
-
-      # Renders the real SwiftUI reminder card, all faces, the animation
-      # frames and the menu bar icon to PNGs, attached to the Release.
-      # Never blocks the build if rendering misbehaves on the CI machine.
-      - name: Render UI previews
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          PREVIEW_DIR="$PWD/previews" swift test --filter UIPreviewTests 2>&1 | tail -20
-          ls -la previews || true
+          # A crash prints no failure line: say which test was running, and the end of the log.
+          if [ -s problems.txt ]; then
+            last=$(grep -E "Test Case .* started" test.log | tail -1)
+            echo "::notice title=Last test started::${last:-none}"
+            tail -40 test.log | grep -v "^\s*$" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}' > tail.txt
+            echo "::notice title=End of test log::$(cat tail.txt)"
+          fi
 
       - name: Build and package
         run: |
           chmod +x build.sh
           ./build.sh
+          # Must be an Apple Silicon binary even when built on Intel.
+          lipo -archs "dist/Remind Me.app/Contents/MacOS/RemindMe" | grep -qx arm64
 
       - name: Publish .dmg as a Release
         env:
@@ -76,3 +84,41 @@ jobs:
           gh release create "$TAG" "Remind-Me.dmg" previews/*.png \
             --title "Remind Me (build ${GITHUB_RUN_NUMBER})" \
             --notes "Built from commit ${GITHUB_SHA::7}. Open the .dmg and drag Remind Me into Applications. First launch: right-click > Open, or System Settings > Privacy & Security > Open Anyway."
+
+  # Preview images of the real SwiftUI views, added to the build's Release.
+  # Needs a Mac with a GPU (SwiftUI renders with Metal), so Apple Silicon;
+  # never blocks or fails the build if that machine isn't available.
+  previews:
+    needs: build
+    runs-on: macos-15
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v5
+
+      - name: Use the newest Xcode (26 has Liquid Glass)
+        run: |
+          X=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$X" ]; then sudo xcode-select -s "$X"; fi
+          xcode-select -p
+
+      - name: Render UI previews
+        run: |
+          PREVIEW_DIR="$PWD/previews" swift test --filter UIPreviewTests > preview.log 2>&1 || true
+          count=$(ls previews/*.png 2>/dev/null | wc -l | tr -d ' ')
+          echo "::notice title=Previews::${count} images. $(grep -E 'Executed [0-9]+ tests?' preview.log | tail -1)"
+          grep -E "error|failed|Fatal|crash|signal" preview.log | awk '!seen[$0]++' | head -15 > preview-problems.txt || true
+          if [ -s preview-problems.txt ]; then
+            body=$(sed 's/%/%25/g' preview-problems.txt | awk '{printf "%s%%0A", $0}')
+            echo "::warning title=Preview problems::${body}"
+          fi
+
+      - name: Add them to the Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          files=(previews/*.png)
+          [ ${#files[@]} -gt 0 ] || exit 0
+          gh release upload "build-${GITHUB_RUN_NUMBER}" "${files[@]}" --clobber

@@ -12,8 +12,10 @@ struct PanelRootView: View {
 
     @ObservedObject private var themeStore = ThemeStore.shared
     @ObservedObject private var scheduler = ReminderScheduler.shared
+    @ObservedObject private var missed = AppSettings.missed
     @Query(sort: \Item.createdAt, order: .reverse) private var items: [Item]
     @Query(sort: \Occurrence.scheduledFireDate, order: .reverse) private var occurrences: [Occurrence]
+    @ObservedObject private var timers = TaskTimers.store
     @State private var showingSettings = false
     /// The reminder or summary that was on screen when the panel started to
     /// fade out, kept so the fade shows it rather than a sudden swap to the pill.
@@ -21,6 +23,9 @@ struct PanelRootView: View {
 
     private enum Layer {
         case live(Occurrence)
+        case timer(TaskTimers.Entry)
+        case missed
+        case goalCheckIn
         case endOfDay
         case weekly
         case expanded
@@ -29,6 +34,9 @@ struct PanelRootView: View {
 
     private var layer: Layer {
         if let occurrence = scheduler.activeOccurrence { return .live(occurrence) }
+        if let entry = timers.value.entries.first(where: { $0.state == .asking }) { return .timer(entry) }
+        if scheduler.showMissed { return .missed }
+        if scheduler.showGoalCheckIn { return .goalCheckIn }
         if scheduler.showEndOfDaySummary { return .endOfDay }
         if scheduler.showWeeklySummary { return .weekly }
         if controller.isHiding, let held = heldOverlay { return held }
@@ -36,7 +44,7 @@ struct PanelRootView: View {
     }
 
     private var active: [Item] {
-        items.filter { $0.kind == .goal ? !$0.isAchieved : $0.isActive }
+        items.filter { $0.kind == .goal ? !$0.isAchieved : ($0.isActive && !$0.isOver) }
     }
 
     private var todayOccurrences: [Occurrence] {
@@ -52,6 +60,17 @@ struct PanelRootView: View {
             case .live(let occurrence):
                 LiveReminderView(occurrence: occurrence, theme: themeStore.theme)
                     .id(occurrence.id) // fresh face + reaction state for every reminder
+                    .transition(.opacity)
+            case .timer(let entry):
+                TimerAskView(entry: entry, theme: themeStore.theme)
+                    .id(entry.id)
+                    .transition(.opacity)
+            case .missed:
+                MissedView(entries: missed.value.entries, theme: themeStore.theme,
+                           onDone: { scheduler.dismissMissed() })
+                    .transition(.opacity)
+            case .goalCheckIn:
+                GoalCheckInView(items: items, occurrences: occurrences, theme: themeStore.theme)
                     .transition(.opacity)
             case .endOfDay:
                 EndOfDaySummaryView(
@@ -97,6 +116,20 @@ struct PanelRootView: View {
         .onChange(of: scheduler.activeOccurrence?.id) {
             if let occurrence = scheduler.activeOccurrence {
                 heldOverlay = .live(occurrence)
+            } else if !controller.isHiding {
+                heldOverlay = nil
+            }
+        }
+        .onChange(of: scheduler.showMissed) {
+            if scheduler.showMissed {
+                heldOverlay = .missed
+            } else if !controller.isHiding {
+                heldOverlay = nil
+            }
+        }
+        .onChange(of: scheduler.showGoalCheckIn) {
+            if scheduler.showGoalCheckIn {
+                heldOverlay = .goalCheckIn
             } else if !controller.isHiding {
                 heldOverlay = nil
             }

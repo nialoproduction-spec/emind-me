@@ -38,29 +38,74 @@ Sources/RemindMe/
     ReminderScheduler.swift      THE core loop: 20 s tick, firing, nagging, snooze, pause-resume,
                                  away hold, end-of-day + weekly summary triggers, shortcuts
     ItemActions.swift            pause / resume / edit / apply suggestion; OccurrenceActions (checklist)
-    ItemDeletion.swift           the ONLY way to delete an Item (removes its occurrences too)
+    GoalCheckIn.swift            goal answers per day (Done / Not today), unanswered goals
+    ItemDeletion.swift           the ONLY way to delete an Item (removes its occurrences too); records an undo
+    UndoCenter.swift             the last delete / Done / Skip, undoable for 10 min (⌘Z in the panel, Undo bar,
+                                 menu bar right-click)
+    Backup.swift                 one JSON file of all items + occurrences; restore only adds what's missing (by id);
+                                 daily auto-backup in Application Support/Remind Me/Backups, last 7 kept
+    LoginItem.swift              open at login (SMAppService), on at the first launch, then follows the switch
+    RenderWatcher.swift          "Render done" ping: FSEvents on chosen folders; RenderTracker (pure, tested) says
+                                 when a new video stopped growing; only while DaVinci Resolve is running
     StoreRepair.swift            raw SQLite clean-up of orphaned rows, runs before SwiftData opens
     Insights.swift               history, streaks, weekly summary, smart suggestions (pure functions)
     AwayDetector.swift           idle time → "away" (no permissions needed)
     GlobalHotkeys.swift          ⌃⌥D / ⌃⌥S / ⌃⌥K via Carbon RegisterEventHotKey, only while a reminder shows
     BreakCycle.swift             break timer ("rest every 40 min and take a 10 min break"): pure
                                  BreakCycleState + BreakCycleManager; state in UserDefaults (not
-                                 SwiftData), countdown in the menu bar, pauses while the Mac sleeps
+                                 SwiftData), countdown at the notch (not the menu bar), pauses while the Mac sleeps
     NotificationService.swift    local UNUserNotifications
     FocusGuard.swift             full-screen / Focus detection
     PersistenceController.swift  ModelContainer
   Panel/
     ReminderPanel.swift          borderless non-activating NSPanel
+    NoticePill.swift             reminders' popup: the habit card's look (theme, the original animated face,
+                                 title) with no buttons, a short quote (ReminderQuotes) instead; sent off by a
+                                 click (default), double-click or a 0.9 s rest of the pointer (`ReminderPopupSettings
+                                 .dismiss`): crying last words + shake, "Sayonara.", dissolve. Time runs out while
+                                 you're typing/moving the pointer (`wasIgnored`, input < 3 s ago, pointer not on
+                                 it): angry face, red edge, `ignoredWords`, the window buzzes + trackpad haptic
+                                 taps (only felt with a finger on the trackpad), "Sayonara.", dissolve
+    BreakIsland.swift            the break timer's home, at the camera notch: solid colours (the pick
+                                 shows exactly; glass was tried and dropped). Compact: each side only
+                                 as wide as its own content (asymmetric around the notch); by default
+                                 face + "Working"/"Break" + time stay up the whole time, counting
+                                 (`wordsStay`; off = just face + time between moments); the last 10 s
+                                 of work say "Work ends in" 10 … 0 (`secondsOnly`). Living faces
+                                 (blink / sleepy bob + drifting z's / angry shake), breathing break;
+                                 on a break the left side is wider by `zRoom` so the z's float in
+                                 view instead of under the camera; every part's position and size,
+                                 extra side widths and reach below the notch come from
+                                 `BreakTimerSettings.layout` (`IslandLayout`), edited by dragging in
+                                 Views/IslandLayoutEditor.swift (Settings → Smart); `IslandBody` draws
+                                 from plain values so the editor and the notch share it;
+                                 "Working" / "Break" + countdown, or
+                                 "Come back!" with a red pulsing left side and red +time away; work
+                                 countdown always counting by default (`BreakTimerSettings.workCountdownStays`, alias
+                                 `keepWorkCountdown`; the old saved key is ignored on purpose); a click
+                                 never hides it (it used to, and the user lost it by accident);
+                                 colours per state (`IslandPalette`: work black, break #C5D2E5, time
+                                 away counted up in red), set in Settings → Smart;
+                                 BreakIslandRules / IslandGeometry = pure, tested
     ReminderPanelController.swift  show/hide fades, auto-hide, sizes, placement, overlays
   Views/
     PanelRootView.swift          picks the layer: live reminder > end of day > weekly > list > pill
     ExpandedPanelView.swift      the list (Goals → Reminders → Today), swipe/context actions,
                                  inner pages (Edit, History, Weekly), add field, suggestions
-    LiveReminderView.swift       the pop-up card: face, Done / Snooze (lengths) / Skip
+    LiveReminderView.swift       the pop-up card: face, Done / Snooze (lengths) / Skip; loud (angry + red edge)
+                                 once ignored 3 times in a row
+    MissedView.swift             "You missed" overlay: what came due while away / asleep / off
+    HabitCalendarView.swift      month grid of done / some / missed / skipped days (on the History page)
     EditItemView, ItemHistoryView, WeeklySummaryView, SmartSettingsView, ThemeSettingsView,
     ManageRemindersView, ReminderRowView, ChecklistRowView, CollapsedPillView, EndOfDaySummaryView
-  Faces/                         24 traced kaomoji faces, animation, menu bar face
-Tests/RemindMeTests/             XCTest; UIPreviewTests renders PNGs when PREVIEW_DIR is set
+  Faces/                         the 24 traced faces (the user's originals, "OG"), animation, menu bar
+                                 face. Use only these. A generated face kit and hand-drawn cute faces
+                                 were tried on 20 Oct 2026 and removed at the user's request.
+                                 MenuBarFace wakes near the pointer (O 3 O), watches (O ω O) leaning
+                                 toward it, blinks (— ω —), shy up close (≡ ᴗ ≡)
+                                 (`look`/`watchFace`/`watchingImage`, polled 10×/s, 30×/s while awake)
+Tests/RemindMeTests/             XCTest; UIPreviewTests renders PNGs when PREVIEW_DIR is set (CI attaches
+                                 them to the release: look at them after any visual change)
 Design/, scripts/trace_faces.py  source art + the tracer that generated Faces/FaceArt.swift
 ```
 
@@ -107,3 +152,37 @@ Design/, scripts/trace_faces.py  source art + the tracer that generated Faces/Fa
   with no jargon.
 - Keep pure logic (parsing, scheduling maths, insights) in testable functions
   separate from views. Add tests next to any change in behaviour.
+
+## Types (v2)
+- Reminder = `Item.style == .justRemind`: popup only, no Occurrence, no Done/Snooze/Skip, no notification.
+- Habit = `.habit` (nil `styleRaw` counts as habit): the full card and notification.
+- Goal = `kind == .goal`: no schedule. Answered once a day, Done or Not today, at the check-in time
+  (`GoalNudgeSettings`, 8 PM default, editable in Settings → Smart) via `GoalCheckInView` in the panel.
+  Answers are stored as done / skipped `Occurrence`s (`Services/GoalCheckIn.swift`), never pending,
+  and are kept out of the Today checklist. `isAchieved` = finished for good (stops the asking).
+- Type is picked for you as you type (a time → Reminder, none → Goal) and shown by `TypePicker`,
+  three icons beside the send arrow: the chosen one lit blue, the rest grey; click to switch
+  (Habit also ⌘↩). No preview bar pops up while typing. "remind me to" and typos of "every" / units are
+  cleaned up by the parser first. A clock time works with or without "at" ("at 6pm", "every 6pm" =
+  daily, "6:30 pm", "9.15am", "21:00"; `bareClockTime` needs am/pm or a colon so plain numbers don't count).
+- Dated schedules are `.scheduledRoutine` plus optional fields (older stores open with them nil = daily/weekly):
+  `onceAt` (one-time: "tomorrow 3pm", "Nov 5 at 10am", "in 2 hours"; after it fires `endedAt` is set and it
+  leaves the lists), `monthDay` (+ `yearMonth` = yearly; "pay rent on the 1st", "anniversary every Mar 12",
+  birthdays), `dueDate` (deadline, "X due Nov 10": popup nudges 7, 3, 1 day before and on the day at 10 AM,
+  a "Deadlines" section, right-click "Delivered"; over after its day). `Item.repeatKind` says which. A date with
+  no time and no "remind me" stays a goal's target date. `ItemParser.parse(_:now:calendar:)` for tests.
+- Missed: a quiet reminder that fires late (> 2 min, Mac asleep / off) or while away / full screen isn't popped
+  up; it goes on `AppSettings.missed`, shown as the "You missed" overlay once you're back.
+- Ignored: a popup that timed out while you were busy, or a habit left unfinished, counts up
+  (`AppSettings.ignored`); from 3 in a row it comes back loud (angry, red edge, buzz, stays until clicked).
+  Answering resets it.
+- Rows show "N total" and "N days in a row". A habit card has three buttons only: Done, Snooze
+  (shortest length; right-click for the others), Skip.
+- All sounds are off. Don't add any.
+- Enter saves at once.
+- The break timer is listed in its own "Break timer" section (`BreakTimerSection`): `stop()` greys it
+  out but keeps `config`, `resume()` restarts it, `remove()` forgets it. Lengths are in seconds.
+- A break that ends with no input for 5 s (`awayAfter`, kept short on purpose: the user wants it
+  sensitive) goes to phase `.waiting` (red, angry "Come back!" count-up at the notch); the next work stretch starts counting at the first key press / mouse move (idle ≤ 2 s).
+  The idle time is injected (`idleSeconds:`) so tests never read the real one.
+- A menu bar click opens the list directly (`openMainPage`), not the small pill.

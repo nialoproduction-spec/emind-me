@@ -53,7 +53,7 @@ struct ThemeSettingsView: View {
     private enum Tab: String, CaseIterable, Identifiable {
         case general = "General"
         case smart = "Smart"
-        case reminders = "Your reminders"
+        case reminders = "Reminders"
         var id: String { rawValue }
     }
 

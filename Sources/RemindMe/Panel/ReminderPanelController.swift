@@ -56,6 +56,9 @@ final class ReminderPanelController: ObservableObject {
     private var lastEngaged = Date.distantPast
     private var idleWatch: Task<Void, Never>?
     private var outsideClickMonitor: Any?
+    /// Set right after adding something: the panel doesn't auto-hide until
+    /// the next click elsewhere.
+    private var heldUntilClick = false
     /// Bumped on every show/hide so a fade-out that's been overtaken by a new
     /// show doesn't take the panel off screen when it completes.
     private var visibilityGeneration = 0
@@ -144,6 +147,7 @@ final class ReminderPanelController: ObservableObject {
     func hide() {
         guard let panel, isOnScreen else { return }
         isHiding = true
+        heldUntilClick = false
         stopWatching()
         visibilityGeneration += 1
         let generation = visibilityGeneration
@@ -168,30 +172,35 @@ final class ReminderPanelController: ObservableObject {
         resize(to: Self.collapsedSize, animated: false)
     }
 
-    /// Menu bar click: show the pill (it then hides itself), or put the
-    /// panel away if it's already up. A reminder waiting for an answer is
-    /// never put away this way — the click brings it to the front instead.
+    /// Menu bar click: open the main page (the list), or put the panel away
+    /// if it's already up. A reminder waiting for an answer is never put away
+    /// this way — the click brings it to the front instead.
     func toggleVisibility() {
         guard panel != nil else { return }
         if isOverlayActive {
             show()
         } else if isOnScreen {
-            hide()
+            if isExpanded { hide() } else { setExpanded(true) }
         } else {
-            show()
+            openMainPage()
         }
     }
 
-    /// Right after a new reminder is saved: let the confirmation register for
-    /// a moment, then fade away — unless they've already started typing the
-    /// next one.
-    func closeAfterAdding() {
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(450))
-            guard let self, !self.isOverlayActive,
-                  PanelDraft.shared.text.isEmpty, PanelDraft.shared.pending == nil else { return }
-            self.hide()
-        }
+    /// Straight to the list at full size, fading in (no pill first).
+    func openMainPage() {
+        guard panel != nil else { return }
+        isExpanded = true
+        if !isOnScreen { resize(to: Self.expandedSize, animated: false) }
+        show()
+        if isOnScreen { resize(to: Self.expandedSize, animated: true) }
+    }
+
+    /// Right after something is added: the panel stays up, however long it
+    /// sits, until the person clicks somewhere else on the screen (so they can
+    /// see it in the list, or add another one).
+    func keepOpenUntilClickAway() {
+        heldUntilClick = true
+        lastEngaged = Date()
     }
 
     /// Typing in the panel counts as using it, even with the pointer elsewhere.
@@ -246,6 +255,7 @@ final class ReminderPanelController: ObservableObject {
     private var isPinned: Bool {
         guard let panel else { return false }
         return isOverlayActive
+            || heldUntilClick
             || panel.attachedSheet != nil
             || panel.frame.contains(NSEvent.mouseLocation)
     }
@@ -360,7 +370,8 @@ final class ReminderPanelController: ObservableObject {
             }
             return
         }
-        if scheduler.showEndOfDaySummary || scheduler.showWeeklySummary {
+        if scheduler.showMissed || scheduler.showGoalCheckIn || scheduler.showEndOfDaySummary
+            || scheduler.showWeeklySummary {
             isExpanded = true
             show()
             resize(to: Self.expandedSize, animated: true)
@@ -404,6 +415,17 @@ final class ReminderPanelController: ObservableObject {
     }
 
     // MARK: - Placement
+
+    /// Where a popup of `size` goes: the same spot as the panel's pill.
+    func frameForNotice(size: CGSize) -> NSRect {
+        targetFrame(for: size)
+    }
+
+    /// The panel's frame while it's on screen, else nil.
+    var visibleFrameOnScreen: NSRect? {
+        isOnScreen ? panel?.frame : nil
+    }
+
 
     /// Where a panel of `size` belongs right now, per the placement setting.
     private func targetFrame(for size: CGSize) -> NSRect {

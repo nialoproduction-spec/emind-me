@@ -27,7 +27,13 @@ final class DeletionTests: XCTestCase {
             escalationSettings: { EscalationSettings(maxReminders: 3, intervalMinutes: 15) },
             isAway: { false },
             resumed: { _ in },
-            weeklySettings: .testing(WeeklySummarySettings(isEnabled: false))
+            weeklySettings: .testing(WeeklySummarySettings(isEnabled: false)),
+            goalNudgeSettings: .testing(GoalNudgeSettings(isEnabled: false)),
+            showNotice: { _ in },
+            popupSettings: .testing(ReminderPopupSettings()),
+            missed: .testing(MissedList()),
+            ignored: .testing(IgnoreCounts()),
+            undo: UndoCenter()
         )
         scheduler.attach(modelContext: context)
     }
@@ -46,7 +52,8 @@ final class DeletionTests: XCTestCase {
 
     private func delete(_ item: Item) {
         ItemDeletion.delete(item, in: context, scheduler: scheduler,
-                            cancelNotifications: { [unowned self] item in self.cancelled.append(item.title) })
+                            cancelNotifications: { [unowned self] item in self.cancelled.append(item.title) },
+                            reschedule: { _ in })
     }
 
     private func count<T: PersistentModel>(_ type: T.Type) -> Int {
@@ -67,6 +74,65 @@ final class DeletionTests: XCTestCase {
         let remaining = try context.fetch(FetchDescriptor<Occurrence>())
         XCTAssertEqual(remaining.first?.item?.title, "Stretch")
         XCTAssertEqual(cancelled, ["Drink water"], "its notifications are cancelled")
+    }
+
+    func testUndoBringsADeletedRoutineBackWithItsHistory() throws {
+        try makeFixture()
+        let water = addRoutine("Drink water", occurrences: 3)
+        water.category = "Health"
+        let id = water.id
+        delete(water)
+        XCTAssertEqual(count(Item.self), 0)
+        XCTAssertEqual(scheduler.undo.available?.label, "Deleted “Drink water”")
+
+        XCTAssertTrue(scheduler.undo.undoLast())
+        let back = try XCTUnwrap(try context.fetch(FetchDescriptor<Item>()).first)
+        XCTAssertEqual(back.id, id, "the same reminder, not a copy")
+        XCTAssertEqual(back.category, "Health")
+        XCTAssertEqual(count(Occurrence.self), 3, "with its history")
+        XCTAssertTrue(try context.fetch(FetchDescriptor<Occurrence>()).allSatisfy { $0.item?.id == id })
+    }
+
+    func testBackupRoundTripAndRestoreOnlyAddsWhatsMissing() throws {
+        try makeFixture()
+        let water = addRoutine("Drink water", occurrences: 2)
+        water.dueDate = clock
+        water.monthDay = 5
+        addRoutine("Stretch", occurrences: 1)
+        let file = try Backup.decode(Backup.encode(Backup.make(from: context, now: clock)))
+        XCTAssertEqual(file.items.count, 2)
+        XCTAssertEqual(file.occurrences.count, 3)
+
+        // Keep the container: a context doesn't keep its container alive.
+        let freshContainer = try ModelContainer(for: Item.self, Occurrence.self,
+                                                configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let fresh = freshContainer.mainContext
+        let first = Backup.restore(file, into: fresh)
+        XCTAssertEqual(first.items, 2)
+        XCTAssertEqual(first.entries, 3)
+        let restored = try fresh.fetch(FetchDescriptor<Item>()).first { $0.title == "Drink water" }
+        XCTAssertEqual(restored?.monthDay, 5)
+        XCTAssertEqual(restored?.dueDate, clock)
+        let again = Backup.restore(file, into: fresh)
+        XCTAssertEqual(again.items, 0, "nothing twice")
+        XCTAssertEqual(again.entries, 0)
+        XCTAssertEqual(try fresh.fetch(FetchDescriptor<Occurrence>()).count, 3)
+    }
+
+    func testDailyBackupKeepsTheLastSeven() throws {
+        try makeFixture()
+        addRoutine("Drink water")
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("remindme-backups-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        for day in 0..<9 {
+            Backup.autoSave(from: context, now: clock.addingTimeInterval(Double(day) * 86400), folder: folder)
+        }
+        Backup.autoSave(from: context, now: clock.addingTimeInterval(8 * 86400), folder: folder) // same day again
+        let names = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+        XCTAssertEqual(names.count, 7)
+        XCTAssertTrue(names.contains(Backup.fileName(for: clock.addingTimeInterval(8 * 86400))))
+        XCTAssertFalse(names.contains(Backup.fileName(for: clock)), "the oldest go")
     }
 
     func testDeletingAGoalWorks() throws {
@@ -158,7 +224,11 @@ final class StoreRepairTests: XCTestCase {
         XCTAssertEqual(try container.mainContext.fetch(FetchDescriptor<Occurrence>()).count, 0)
         let scheduler = ReminderScheduler(presenter: FakePresenter(), shouldSuppress: { false },
                                           isAway: { false }, resumed: { _ in },
-                                          weeklySettings: .testing(WeeklySummarySettings(isEnabled: false)))
+                                          weeklySettings: .testing(WeeklySummarySettings(isEnabled: false)),
+                                          goalNudgeSettings: .testing(GoalNudgeSettings(isEnabled: false)),
+                                          showNotice: { _ in }, popupSettings: .testing(ReminderPopupSettings()),
+                                          missed: .testing(MissedList()), ignored: .testing(IgnoreCounts()),
+                                          undo: UndoCenter())
         scheduler.attach(modelContext: container.mainContext)
         scheduler.tick()
     }

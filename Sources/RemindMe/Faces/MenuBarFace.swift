@@ -57,6 +57,10 @@ enum HoverReaction: String, CaseIterable {
 
 /// Draws and animates the menu bar icon:
 /// - idle: the —ω— logo, unchanged (it's the sleepy face);
+/// - pointer comes near: it wakes up ("ooh!", O 3 O), then watches wide
+///   awake (O ω O), leaning toward the pointer wherever it goes, blinking
+///   now and then, shy right next to it; falls back asleep a moment after
+///   the pointer leaves. Only the original traced faces, nothing else;
 /// - pointer over it: wakes up with a random reaction, then back to the logo
 ///   once the pointer leaves;
 /// - a reminder waiting for an answer: shows that reminder's mood face
@@ -75,9 +79,18 @@ final class MenuBarFace {
 
     private enum State {
         case idle
+        case watching
         case hover(HoverReaction, start: Date)
         case reminder(FaceMood, start: Date)
     }
+    private var proximity: Task<Void, Never>?
+    private var wokeAt = Date.distantPast
+    private var lastNear = Date.distantPast
+
+    /// How close (in points) the pointer has to come to wake it.
+    nonisolated static let wakeDistance: CGFloat = 220
+    /// Asleep again this long after the pointer has gone.
+    nonisolated static let sleepAfter: TimeInterval = 1.4
     private var state: State = .idle
     private var pointerInside = false
     private var lastReaction: HoverReaction?
@@ -104,13 +117,95 @@ final class MenuBarFace {
             .receive(on: RunLoop.main)
             .sink { [weak self] occurrence in self?.reminderChanged(occurrence) }
             .store(in: &cancellables)
+
+        // Watches where the pointer is: a cheap check ten times a second,
+        // thirty while it's awake and following the pointer.
+        proximity = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let wait = self.watchStep()
+                try? await Task.sleep(for: .milliseconds(wait))
+            }
+        }
     }
 
-    // MARK: - Events
+    // MARK: - Watching the pointer
+
+    private func watchStep() -> Int {
+        guard AppSettings.face.value.followPointer,
+              let frame = button?.window?.frame, frame.width > 0 else {
+            if case .watching = state { goIdle() }
+            return 400
+        }
+        let mouse = NSEvent.mouseLocation
+        let dx = mouse.x - frame.midX
+        let dy = mouse.y - frame.midY
+        let distance = hypot(dx, dy)
+        let near = distance < Self.wakeDistance
+        let now = Date()
+        if near { lastNear = now }
+
+        switch state {
+        case .idle:
+            guard near else { return 100 }
+            state = .watching
+            wokeAt = now
+            drawWatching(dx: dx, dy: dy, now: now)
+            return 33
+        case .watching:
+            if !near, now.timeIntervalSince(lastNear) > Self.sleepAfter {
+                goIdle()
+                return 100
+            }
+            drawWatching(dx: dx, dy: dy, now: now)
+            return 33
+        case .hover, .reminder:
+            return 150 // those draw themselves
+        }
+    }
+
+    private func drawWatching(dx: CGFloat, dy: CGFloat, now: Date) {
+        let face = Self.watchFace(awake: now.timeIntervalSince(wokeAt), distance: hypot(dx, dy))
+        let look = Self.look(dx: dx, dy: dy)
+        show(key: "watch|\(face)|\(Int(look.dx * 8))|\(Int(look.dy * 8))",
+             image: Self.watchingImage(face, look: look))
+    }
+
+    /// The original faces it watches with (all drawn at one size and centre):
+    /// "ooh!" (O 3 O) as it wakes, then wide awake (O ω O), blinking (— ω —)
+    /// every ~4 seconds, and shy (≡ ᴗ ≡) when the pointer is right next to it.
+    nonisolated static let watchFaces: [Face] = [.surprisedKiss, .owo, .sleepy, .sheepish]
+
+    nonisolated static func watchFace(awake: TimeInterval, distance: CGFloat) -> Face {
+        if awake < 0.6 { return .surprisedKiss }
+        if distance < 45 { return .sheepish }
+        if awake.truncatingRemainder(dividingBy: 4.1) > 3.97 { return .sleepy }
+        return .owo
+    }
+
+    /// Which way it leans to look at the pointer (screen y is up, the image
+    /// is drawn y-down), full strength once it's more than ~60 pt away.
+    nonisolated static func look(dx: CGFloat, dy: CGFloat) -> CGVector {
+        let distance = hypot(dx, dy)
+        guard distance > 0.5 else { return .zero }
+        let strength = min(1, distance / 60)
+        return CGVector(dx: dx / distance * strength, dy: -dy / distance * strength)
+    }
+
+    /// A watching face, nudged toward the pointer (`look`, each axis -1…1).
+    nonisolated static func watchingImage(_ face: Face, look: CGVector) -> NSImage {
+        faceImage(face, span: watchSpan, offset: CGPoint(x: look.dx * 2, y: look.dy * 1.6))
+    }
+
+    nonisolated private static let watchSpan = span(of: watchFaces)
 
     private func pointerEntered() {
         pointerInside = true
-        guard case .idle = state else { return } // a waiting reminder's face takes priority
+        // A waiting reminder's face takes priority; idle or watching, react.
+        switch state {
+        case .idle, .watching: break
+        default: return
+        }
         let reaction = HoverReaction.random(excluding: lastReaction)
         lastReaction = reaction
         state = .hover(reaction, start: Date())
@@ -167,7 +262,7 @@ final class MenuBarFace {
     private func step() -> Int? {
         let now = Date()
         switch state {
-        case .idle:
+        case .idle, .watching:
             return nil
         case .hover(let reaction, let start):
             let t = now.timeIntervalSince(start)

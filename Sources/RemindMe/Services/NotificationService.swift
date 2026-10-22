@@ -21,7 +21,8 @@ final class NotificationService {
     /// matches its current kind and settings.
     func schedule(for item: Item) {
         cancel(for: item)
-        guard item.kind != .goal, item.isActive else { return }
+        // Reminders use the little popup instead (no duplicate banner).
+        guard item.kind != .goal, item.isActive, item.style == .habit else { return }
 
         switch item.kind {
         case .repeatingRoutine:
@@ -31,16 +32,6 @@ final class NotificationService {
         case .goal:
             break
         }
-    }
-
-    /// A one-off banner right now (the break timer uses this). No sound: the
-    /// caller plays its own beep.
-    func postNow(title: String, body: String) {
-        let content = UNMutableNotificationContent()
-        content.title = title
-        content.body = body
-        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request)
     }
 
     func cancel(for item: Item) {
@@ -59,9 +50,31 @@ final class NotificationService {
     }
 
     private func scheduleClockTime(_ item: Item) {
-        guard let hour = item.hour, let minute = item.minute else { return }
+        guard let hour = item.hour, let minute = item.minute, !item.isOver else { return }
         let content = makeContent(for: item)
         let weekdays = item.weekdaysRaw ?? []
+
+        // One-time, monthly, yearly: one trigger each.
+        var special: (DateComponents, Bool)?
+        switch item.repeatKind {
+        case .once:
+            guard let onceAt = item.onceAt, onceAt > .now else { return }
+            special = (Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: onceAt), false)
+        case .monthly:
+            special = (DateComponents(day: item.monthDay, hour: hour, minute: minute), true)
+        case .yearly:
+            special = (DateComponents(month: item.yearMonth, day: item.monthDay, hour: hour, minute: minute), true)
+        case .deadline:
+            return // deadlines use the little popup
+        case .daily, .weekly:
+            break
+        }
+        if let special {
+            let trigger = UNCalendarNotificationTrigger(dateMatching: special.0, repeats: special.1)
+            let request = UNNotificationRequest(identifier: item.id.uuidString, content: content, trigger: trigger)
+            UNUserNotificationCenter.current().add(request)
+            return
+        }
 
         if weekdays.isEmpty {
             var comps = DateComponents()
@@ -89,7 +102,7 @@ final class NotificationService {
         let content = UNMutableNotificationContent()
         content.title = item.title
         content.body = item.kind == .repeatingRoutine ? "Time for your routine" : "Reminder"
-        content.sound = .default
+        content.sound = nil // silent, by choice
         return content
     }
 }

@@ -132,6 +132,10 @@ struct ItemHistoryContent: View {
                 }
             }
 
+            if item.style == .habit || item.kind == .goal || !mine.isEmpty {
+                HabitCalendarView(occurrences: mine, theme: theme, now: now)
+            }
+
             let recent = mine.sorted { $0.scheduledFireDate > $1.scheduledFireDate }.prefix(8)
             if !recent.isEmpty {
                 VStack(alignment: .leading, spacing: 5) {

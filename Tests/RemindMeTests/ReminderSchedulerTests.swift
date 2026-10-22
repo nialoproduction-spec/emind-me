@@ -30,6 +30,12 @@ final class ReminderSchedulerTests: XCTestCase {
     private var snoozeDefault = 5
     private var resumedTitles: [String] = []
     private var weekly: PersistedSettings<WeeklySummarySettings>!
+    private var goalNudge: PersistedSettings<GoalNudgeSettings>!
+    private var notices: [NoticeContent] = []
+    private var popup: PersistedSettings<ReminderPopupSettings>!
+    private var missedStore: PersistedSettings<MissedList>!
+    private var ignoredStore: PersistedSettings<IgnoreCounts>!
+    private var undoCenter: UndoCenter!
     private var scheduler: ReminderScheduler!
 
     /// Fresh in-memory store + scheduler for each test (XCTest makes a new
@@ -42,6 +48,11 @@ final class ReminderSchedulerTests: XCTestCase {
         context = container.mainContext
         presenter = FakePresenter()
         weekly = .testing(WeeklySummarySettings(isEnabled: false))
+        goalNudge = .testing(GoalNudgeSettings(isEnabled: false))
+        popup = .testing(ReminderPopupSettings())
+        missedStore = .testing(MissedList())
+        ignoredStore = .testing(IgnoreCounts())
+        undoCenter = UndoCenter()
         scheduler = ReminderScheduler(
             presenter: presenter,
             now: { [unowned self] in self.clock },
@@ -50,7 +61,13 @@ final class ReminderSchedulerTests: XCTestCase {
             isAway: { [unowned self] in self.away },
             defaultSnoozeMinutes: { [unowned self] in self.snoozeDefault },
             resumed: { [unowned self] in self.resumedTitles.append($0.title) },
-            weeklySettings: weekly
+            weeklySettings: weekly,
+            goalNudgeSettings: goalNudge,
+            showNotice: { [unowned self] in self.notices.append($0) },
+            popupSettings: popup,
+            missed: missedStore,
+            ignored: ignoredStore,
+            undo: undoCenter
         )
         scheduler.attach(modelContext: context)
     }
@@ -69,6 +86,459 @@ final class ReminderSchedulerTests: XCTestCase {
 
     private func occurrences() -> [Occurrence] {
         (try? context.fetch(FetchDescriptor<Occurrence>())) ?? []
+    }
+
+    // MARK: - One-time, deadlines, missed, loud, undo
+
+    func testOneTimeReminderFiresOnceThenGoesAway() throws {
+        try makeFixture()
+        let item = Item(title: "Call client", kind: .scheduledRoutine, hour: 15, minute: 0, style: .justRemind)
+        item.onceAt = clock.addingTimeInterval(60)
+        item.nextFireDate = item.computeNextFireDate(after: clock)
+        context.insert(item)
+        advance(minutes: 1.5)
+        scheduler.tick()
+        XCTAssertEqual(notices.map(\.title), ["Call client"])
+        XCTAssertNotNil(item.endedAt, "it's over: gone from the list")
+        XCTAssertNil(item.nextFireDate)
+        advance(minutes: 24 * 60)
+        scheduler.tick()
+        XCTAssertEqual(notices.count, 1, "never again")
+    }
+
+    func testDeadlineNudgesSevenThreeOneAndOnTheDayThenEnds() throws {
+        try makeFixture()
+        let calendar = Calendar.current
+        let due = calendar.date(byAdding: .day, value: 8, to: calendar.startOfDay(for: clock))!
+        let item = Item(title: "Sharma teaser", kind: .scheduledRoutine, hour: 10, minute: 0, style: .justRemind)
+        item.dueDate = due
+        item.nextFireDate = item.computeNextFireDate(after: clock)
+        context.insert(item)
+        for _ in 0..<6 {
+            guard let next = item.nextFireDate else { break }
+            clock = next.addingTimeInterval(30)
+            scheduler.tick()
+        }
+        XCTAssertEqual(notices.count, 4, "7, 3 and 1 day before, and on the day")
+        XCTAssertTrue(notices.first?.detail?.hasPrefix("Due in 7 days") ?? false, notices.first?.detail ?? "")
+        XCTAssertEqual(notices.last?.detail, "Due today")
+        XCTAssertEqual(notices.last?.plainDetail, true, "information, not a quote")
+        XCTAssertNil(item.endedAt, "still listed on its day")
+        clock = due.addingTimeInterval(86400 + 60)
+        scheduler.tick()
+        XCTAssertNotNil(item.endedAt, "over once its day has gone")
+    }
+
+    func testLateRemindersGoOnTheMissedList() throws {
+        try makeFixture()
+        let item = addRepeating(everyMinutes: 40, title: "Msg wife")
+        item.style = .justRemind
+        advance(minutes: 5 * 60) // the Mac was asleep
+        scheduler.tick()
+        XCTAssertTrue(notices.isEmpty, "no stale popup")
+        let entry = try XCTUnwrap(missedStore.value.entries.first)
+        XCTAssertEqual(entry.title, "Msg wife")
+        XCTAssertEqual(entry.count, 8, "due 8 times while asleep")
+        XCTAssertTrue(scheduler.showMissed)
+        XCTAssertEqual(presenter.overlayShown, 1)
+        scheduler.dismissMissed()
+        XCTAssertTrue(missedStore.value.isEmpty)
+        XCTAssertFalse(scheduler.showMissed)
+    }
+
+    func testRemindersWhileAwayAreMissedNotDropped() throws {
+        try makeFixture()
+        let item = addRepeating(everyMinutes: 40)
+        item.style = .justRemind
+        away = true
+        advance(minutes: 1)
+        scheduler.tick()
+        XCTAssertTrue(notices.isEmpty)
+        XCTAssertEqual(missedStore.value.entries.map(\.title), ["Drink water"])
+        XCTAssertFalse(scheduler.showMissed, "waits until you're back")
+        away = false
+        scheduler.tick()
+        XCTAssertTrue(scheduler.showMissed)
+    }
+
+    func testIgnoredThreeTimesComesBackLoud() throws {
+        try makeFixture()
+        let item = addRepeating(everyMinutes: 40)
+        item.style = .justRemind
+        for _ in 0..<3 { scheduler.popupOutcome(itemID: item.id, ignored: true) }
+        advance(minutes: 1)
+        scheduler.tick()
+        let shown = try XCTUnwrap(notices.last)
+        XCTAssertTrue(shown.loud)
+        XCTAssertTrue(shown.sticky, "stays until clicked")
+        XCTAssertEqual(shown.itemID, item.id)
+        XCTAssertEqual(shown.detail, ReminderScheduler.loudLine(times: 3))
+        scheduler.popupOutcome(itemID: item.id, ignored: false)
+        XCTAssertFalse(ignoredStore.value.isLoud(item.id), "clicked: back to normal")
+    }
+
+    func testHabitLeftUnfinishedCountsAsIgnored() throws {
+        try makeFixture()
+        let item = addRepeating(everyMinutes: 600)
+        scheduler.tick()
+        for _ in 0..<3 {
+            advance(minutes: 16)
+            scheduler.tick()
+        }
+        XCTAssertEqual(occurrences().first?.status, .unfinished)
+        XCTAssertEqual(ignoredStore.value.count(for: item.id), 1)
+        scheduler.markDone()
+        XCTAssertEqual(ignoredStore.value.count(for: item.id), 0, "answered: the count starts over")
+    }
+
+    func testUndoDoneBringsTheReminderBack() throws {
+        try makeFixture()
+        addRepeating(everyMinutes: 600)
+        scheduler.tick()
+        scheduler.markDone()
+        XCTAssertNil(scheduler.activeOccurrence)
+        XCTAssertEqual(undoCenter.available?.label, "Done: Drink water")
+        XCTAssertTrue(undoCenter.undoLast())
+        XCTAssertEqual(occurrences().first?.status, .pending)
+        XCTAssertNotNil(scheduler.activeOccurrence, "on screen again")
+        XCTAssertFalse(undoCenter.undoLast(), "only once")
+    }
+
+    // MARK: - Reminder style / goal check-in
+
+    func testJustRemindShowsAPopupWithNoOccurrence() throws {
+        try makeFixture()
+        let item = addRepeating(everyMinutes: 40, title: "Drink water")
+        item.styleRaw = ReminderStyle.justRemind.rawValue
+        advance(minutes: 1)
+        scheduler.tick()
+
+        XCTAssertEqual(occurrences().count, 0, "nothing to tick off")
+        XCTAssertEqual(presenter.liveShown, 0, "no card with buttons")
+        XCTAssertEqual(notices.map(\.title), ["Drink water"])
+        XCTAssertNotNil(item.nextFireDate)
+        XCTAssertGreaterThan(item.nextFireDate ?? .distantPast, clock)
+    }
+
+    func testReminderPopupStaysAsLongAsSettingsSay() throws {
+        try makeFixture()
+        popup.value.seconds = 20
+        let item = addRepeating(everyMinutes: 40, title: "Drink water")
+        item.styleRaw = ReminderStyle.justRemind.rawValue
+        item.category = "Health"
+        advance(minutes: 1)
+        scheduler.tick()
+        let shown = try XCTUnwrap(notices.last)
+        XCTAssertEqual(shown.duration, 20)
+        XCTAssertFalse(shown.sticky)
+        let quote = try XCTUnwrap(shown.detail)
+        XCTAssertTrue(ReminderQuotes.choices(for: "Drink water").contains(quote), "a water quote for a water reminder")
+
+        let untilClicked = ReminderScheduler.popupContent(
+            title: "Stretch", quote: "Motion is lotion.", settings: ReminderPopupSettings(seconds: 0))
+        XCTAssertTrue(untilClicked.sticky, "0 = stays until clicked")
+    }
+
+    func testQuotesMatchTheReminder() {
+        XCTAssertTrue(ReminderQuotes.choices(for: "Drink water").contains("Stay hydrated, stay sharp."))
+        XCTAssertTrue(ReminderQuotes.choices(for: "Stretch my back").contains("Motion is lotion."))
+        XCTAssertTrue(ReminderQuotes.choices(for: "Rest my eyes").contains("Blink. Breathe. Back to it."))
+        XCTAssertTrue(ReminderQuotes.choices(for: "Renew passport").contains("Small steps, every day."),
+                      "anything else gets a general one")
+        XCTAssertTrue(ReminderQuotes.choices(for: "Export the Sharma teaser").contains("Back it up before it backs out."),
+                      "editing work gets editing lines")
+        XCTAssertGreaterThanOrEqual(ReminderQuotes.total, 200, "lots of lines")
+        XCTAssertTrue(ReminderQuotes.habit.contains(ReminderQuotes.habitQuote(for: "Renew passport", pick: 3)))
+        XCTAssertFalse(ReminderQuotes.goal.isEmpty)
+        XCTAssertFalse(ReminderQuotes.lastWords.isEmpty)
+        let allLines = ReminderQuotes.topics.flatMap(\.quotes) + ReminderQuotes.general + ReminderQuotes.habit
+            + ReminderQuotes.goal + ReminderQuotes.lastWords + ReminderQuotes.ignoredWords
+        XCTAssertFalse(allLines.contains { $0.contains("—") || $0.contains("–") }, "plain punctuation only")
+        XCTAssertTrue(allLines.allSatisfy { $0.count <= 48 }, "short enough for one line")
+    }
+
+    func testMenuBarFaceLooksAtThePointer() {
+        let right = MenuBarFace.look(dx: 200, dy: 0)
+        XCTAssertEqual(right.dx, 1, accuracy: 0.001)
+        let below = MenuBarFace.look(dx: 0, dy: -200) // screen y is up
+        XCTAssertEqual(below.dy, 1, accuracy: 0.001, "pointer below the menu bar: pupils look down")
+        let close = MenuBarFace.look(dx: 15, dy: 0)
+        XCTAssertLessThan(close.dx, 0.5, "right next to it: only a small glance")
+        XCTAssertEqual(MenuBarFace.look(dx: 0, dy: 0), .zero)
+    }
+
+    func testPopupSettingsFromBeforeDismissStillLoad() throws {
+        let old = #"{"seconds":20}"#.data(using: .utf8)!
+        let settings = try JSONDecoder().decode(ReminderPopupSettings.self, from: old)
+        XCTAssertEqual(settings.seconds, 20, "the chosen time is kept")
+        XCTAssertEqual(settings.dismiss, .click, "one click by default")
+    }
+
+    func testIgnoredPopupLeavesAngry() {
+        XCTAssertTrue(NoticePillController.wasIgnored(idleSeconds: 0.4, pointerOnIt: false),
+                      "still typing when its time ran out: ignored")
+        XCTAssertFalse(NoticePillController.wasIgnored(idleSeconds: 0.4, pointerOnIt: true),
+                       "pointer resting on it: reading it, not ignoring it")
+        XCTAssertFalse(NoticePillController.wasIgnored(idleSeconds: 60, pointerOnIt: false),
+                       "away from the Mac: it just fades")
+        XCTAssertEqual(NoticePillView.mood(for: .alive), .gentle)
+        XCTAssertEqual(NoticePillView.mood(for: .parting(.ignored, "Ignored again…")), .urgent, "angry")
+        XCTAssertEqual(NoticePillView.mood(for: .sayonara(.ignored)), .urgent, "angry all the way out")
+        XCTAssertEqual(NoticePillView.mood(for: .parting(.dismissed, "Nooooo!")), .skipped, "cries")
+        XCTAssertTrue(ReminderQuotes.ignoredWords.contains("Ignored again…"))
+        XCTAssertFalse(ReminderQuotes.lastWords.contains("Ignored again…"), "sent off isn't ignored")
+        XCTAssertFalse(ReminderQuotes.quote(for: "Drink water", pick: -7).isEmpty, "any pick works")
+    }
+
+    func testMenuBarWatchingUsesTheOriginalFaces() {
+        XCTAssertEqual(MenuBarFace.watchFace(awake: 0.2, distance: 150), .surprisedKiss, "ooh! as it wakes")
+        XCTAssertEqual(MenuBarFace.watchFace(awake: 2, distance: 150), .owo, "wide awake, watching")
+        XCTAssertEqual(MenuBarFace.watchFace(awake: 4.0, distance: 150), .sleepy, "a blink")
+        XCTAssertEqual(MenuBarFace.watchFace(awake: 2, distance: 20), .sheepish, "shy up close")
+        XCTAssertTrue(Set(MenuBarFace.watchFaces).isSubset(of: Set(Face.allCases)))
+    }
+
+    func testJustRemindIsHeldWhileFocusIsOn() throws {
+        try makeFixture()
+        let item = addRepeating(everyMinutes: 40)
+        item.styleRaw = ReminderStyle.justRemind.rawValue
+        suppressed = true
+        advance(minutes: 1)
+        scheduler.tick()
+        XCTAssertTrue(notices.isEmpty)
+        XCTAssertGreaterThan(item.nextFireDate ?? .distantPast, clock, "still moves on")
+    }
+
+    func testGoalNudgeTimingAndOncePerDay() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        let day = cal.date(from: DateComponents(year: 2026, month: 3, day: 3, hour: 19, minute: 59))!
+        let eight = cal.date(from: DateComponents(year: 2026, month: 3, day: 3, hour: 20, minute: 0))!
+        var settings = GoalNudgeSettings()
+        XCTAssertFalse(ReminderScheduler.shouldShowGoalNudge(settings: settings, now: day, calendar: cal))
+        XCTAssertTrue(ReminderScheduler.shouldShowGoalNudge(settings: settings, now: eight, calendar: cal))
+        settings.lastShownDayKey = Occurrence.dayKey(for: eight, calendar: cal)
+        XCTAssertFalse(ReminderScheduler.shouldShowGoalNudge(settings: settings, now: eight, calendar: cal))
+        settings.lastShownDayKey = nil
+        settings.isEnabled = false
+        XCTAssertFalse(ReminderScheduler.shouldShowGoalNudge(settings: settings, now: eight, calendar: cal))
+    }
+
+    func testTypeChooserMapping() {
+        var parsed = ItemParser.parse("Drink water every 40 minutes")
+        XCTAssertEqual(parsed.type, .reminder)
+        parsed.chosen = .habit
+        XCTAssertEqual(parsed.type, .habit)
+        parsed.chosen = .goal
+        XCTAssertEqual(parsed.type, .goal)
+
+        var plain = ItemParser.parse("Go to Godavari")
+        XCTAssertEqual(plain.type, .goal)
+        plain.chosen = .habit
+        XCTAssertEqual(plain.type, .goal, "no schedule, so it can't be a habit")
+
+        var habit = ItemParser.parse("Stretch every 2 hours")
+        habit.chosen = .habit
+        XCTAssertEqual(Item(from: habit).style, .habit)
+        habit.chosen = .reminder
+        XCTAssertEqual(Item(from: habit).style, .justRemind)
+        habit.chosen = .goal
+        XCTAssertEqual(Item(from: habit).kind, .goal)
+    }
+
+    // MARK: - Smarter typing
+
+    func testRemindMeToIsDropped() {
+        let p = ItemParser.parse("remind me to drink water every 4 minute")
+        XCTAssertEqual(p.title, "Drink water")
+        XCTAssertEqual(p.intervalSeconds, 240)
+        XCTAssertEqual(p.type, .reminder, "a time → just a reminder, no clicking")
+        XCTAssertEqual(ItemParser.parse("Reminder: stretch every hour").title, "Stretch")
+        XCTAssertEqual(ItemParser.parse("don't forget to call mom at 5pm").title, "Call mom")
+        XCTAssertEqual(ItemParser.parse("remind me").title, "Remind me", "nothing after it: kept as typed")
+    }
+
+    func testTyposInEveryAndUnits() {
+        XCTAssertEqual(ItemParser.parse("drink water rvry 4 minute").intervalSeconds, 240)
+        XCTAssertEqual(ItemParser.parse("drink water rvrry 4 minute").title, "Drink water")
+        XCTAssertEqual(ItemParser.parse("drink water evry 4 minuts").intervalSeconds, 240)
+        XCTAssertEqual(ItemParser.parse("stretch evrey 2 houres").intervalSeconds, 7200)
+        XCTAssertEqual(ItemParser.parse("sleep over 2 hours").kind, .goal, "real words aren't 'fixed'")
+        XCTAssertEqual(ItemParser.editDistance("rvry", "every"), 2)
+    }
+
+    func testNoTimeIsAGoalAutomatically() {
+        let p = ItemParser.parse("finish the Sharma wedding edit")
+        XCTAssertEqual(p.type, .goal)
+        XCTAssertFalse(p.hasSchedule, "so the Habit button is off")
+    }
+
+    // MARK: - Goal check-in
+
+    private func turnOnGoalCheckIn() {
+        goalNudge.value = GoalNudgeSettings(isEnabled: true, hour: 0, minute: 0)
+    }
+
+    private func addGoal(_ title: String = "Edit 2 hours") -> Item {
+        let goal = Item(title: title, kind: .goal)
+        context.insert(goal)
+        return goal
+    }
+
+    func testCheckInOpensWithOpenGoalsOncePerDay() throws {
+        try makeFixture()
+        turnOnGoalCheckIn()
+        _ = addGoal()
+        scheduler.tick()
+        XCTAssertTrue(scheduler.showGoalCheckIn)
+        XCTAssertEqual(presenter.overlayShown, 1)
+
+        scheduler.dismissGoalCheckIn() // Later
+        scheduler.tick()
+        XCTAssertFalse(scheduler.showGoalCheckIn, "Later means tomorrow")
+        XCTAssertEqual(presenter.overlayShown, 1)
+    }
+
+    func testNoGoalsNoCheckIn() throws {
+        try makeFixture()
+        turnOnGoalCheckIn()
+        let done = addGoal()
+        done.isAchieved = true
+        scheduler.tick()
+        XCTAssertFalse(scheduler.showGoalCheckIn)
+    }
+
+    func testDoneAndNotTodayAreRecordedAndCloseTheCheckIn() throws {
+        try makeFixture()
+        turnOnGoalCheckIn()
+        let edit = addGoal("Edit 2 hours")
+        let gym = addGoal("Gym")
+        scheduler.tick()
+        XCTAssertTrue(scheduler.showGoalCheckIn)
+
+        scheduler.answerGoal(edit, done: true)
+        XCTAssertTrue(scheduler.showGoalCheckIn, "one still waiting")
+        scheduler.answerGoal(gym, done: false)
+        XCTAssertFalse(scheduler.showGoalCheckIn, "all answered: it closes")
+
+        let answers = occurrences()
+        XCTAssertEqual(answers.count, 2)
+        XCTAssertEqual(answers.first { $0.item?.title == "Edit 2 hours" }?.status, .done)
+        XCTAssertEqual(answers.first { $0.item?.title == "Gym" }?.status, .skipped, "Not today")
+        XCTAssertTrue(answers.allSatisfy { $0.nextEscalationAt == nil }, "answers never nag")
+
+        // Changing your mind the same day replaces the answer.
+        scheduler.answerGoal(gym, done: true)
+        XCTAssertEqual(occurrences().count, 2)
+        XCTAssertEqual(GoalCheckIn.todaysAnswer(for: gym, in: occurrences(), now: clock)?.status, .done)
+        XCTAssertTrue(GoalCheckIn.unanswered(goals: [edit, gym], occurrences: occurrences(), now: clock).isEmpty)
+    }
+
+    func testGoalAnswersMakeAStreak() throws {
+        try makeFixture()
+        let goal = addGoal()
+        for day in 0..<3 {
+            GoalCheckIn.answer(goal, done: true, now: clock.addingTimeInterval(Double(-day) * 86400), in: context)
+        }
+        let mine = Insights.occurrences(of: goal, in: occurrences())
+        XCTAssertEqual(mine.filter { $0.status == .done }.count, 3, "3 total")
+        XCTAssertEqual(Insights.streak(Insights.dailyRecords(mine, days: 60, now: clock)), 3, "3 days in a row")
+    }
+
+    func testGoalAnswersDontPopAnything() throws {
+        try makeFixture()
+        let goal = addGoal()
+        GoalCheckIn.answer(goal, done: false, now: clock, in: context)
+        advance(minutes: 30)
+        scheduler.tick()
+        XCTAssertEqual(presenter.liveShown, 0)
+        XCTAssertNil(scheduler.activeOccurrence)
+    }
+
+    func testSnoozeChoicesDefaultTo5_10_30() {
+        XCTAssertEqual(SnoozeSettings().presets, [5, 10, 30])
+    }
+
+    func testIslandSitsOnTheNotch() {
+        // 16-inch MacBook Pro at its default size.
+        let screen = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+        let notch = IslandGeometry.notch(CGSize(width: 200, height: 37))
+        XCTAssertTrue(notch.hasNotch)
+        let frame = IslandGeometry.frame(screen: screen, notch: notch, left: 45, right: 60)
+        XCTAssertEqual(frame.height, 37, "as tall as the notch")
+        XCTAssertEqual(frame.maxY, 1117, "flush with the top of the screen")
+        XCTAssertEqual(frame.minX, 864 - 100 - 45, "left side starts 45 pt out from the notch")
+        XCTAssertEqual(frame.maxX, 864 + 100 + 60, "right side ends 60 pt out from the notch")
+
+        let plain = IslandGeometry.notch(.zero)
+        XCTAssertFalse(plain.hasNotch)
+        XCTAssertEqual(plain.middleWidth, IslandGeometry.noNotchGap)
+    }
+
+    func testIslandSidesFitTheirOwnContent() {
+        XCTAssertEqual(IslandGeometry.side(30), 30 + IslandGeometry.innerGap + IslandGeometry.outerPadding)
+        XCTAssertEqual(IslandGeometry.side(5), IslandGeometry.minWing, "never too thin")
+        XCTAssertEqual(IslandGeometry.side(900), IslandGeometry.maxWing, "never too far out")
+    }
+
+    @MainActor
+    func testCompactIslandIsSmall() {
+        let now = Date()
+        let compact = BreakIslandController.sides(for: NoticeContent(
+            title: "", countdownTo: now.addingTimeInterval(38 * 60), face: .smug, tone: .work))
+        XCTAssertLessThanOrEqual(compact.left, 50, "just the face")
+        XCTAssertLessThanOrEqual(compact.right, 70, "just the time")
+        let state = BreakCycleState.started(BreakCycleConfig(workMinutes: 40, breakMinutes: 10), at: now)
+        XCTAssertTrue(BreakIslandRules.content(for: state, wordsStay: false).title.isEmpty,
+                      "words off: between moments, no words")
+        XCTAssertEqual(BreakIslandRules.content(for: state).title, "Working", "by default the word stays")
+    }
+
+    @MainActor
+    func testNotchLayoutMovesResizesAndGrows() throws {
+        // Settings saved before the layout existed still load, untouched.
+        let old = #"{"keepWorkCountdown":false,"workColor":{"r":0,"g":0,"b":0}}"#.data(using: .utf8)!
+        let loaded = try JSONDecoder().decode(BreakTimerSettings.self, from: old)
+        XCTAssertTrue(loaded.keepWorkCountdown, "always counting is the default now")
+        XCTAssertEqual(loaded.layout, IslandLayout())
+
+        var layout = IslandLayout()
+        layout.nudge(.face, dx: -500)
+        XCTAssertEqual(layout.face.x, IslandLayout.reach.lowerBound, "can't fly off the screen")
+        layout.resize(.time, by: 9)
+        XCTAssertEqual(layout.time.size, IslandLayout.sizes.upperBound)
+        XCTAssertEqual(IslandLayout.clampDrop(500), IslandLayout.maxDrop)
+
+        let content = NoticeContent(title: "", countdownTo: Date().addingTimeInterval(500),
+                                    face: .sleepy, tone: .onBreak)
+        let plain = BreakIslandController.sides(for: content)
+        var moved = IslandLayout()
+        moved.face.x = -30
+        moved.rightExtra = 20
+        let grown = BreakIslandController.sides(for: content, layout: moved)
+        XCTAssertEqual(grown.left, plain.left + 30, accuracy: 0.5, "face dragged out: the side grows to fit it")
+        XCTAssertEqual(grown.right, plain.right + 20, accuracy: 0.5, "extra width on the right")
+        var bigZees = IslandLayout()
+        bigZees.zees.size = 2
+        XCTAssertGreaterThan(BreakIslandController.sides(for: content, layout: bigZees).left, plain.left,
+                             "bigger z's get more room before the notch")
+
+        let screen = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+        let notch = IslandGeometry.notch(CGSize(width: 200, height: 37))
+        let tall = IslandGeometry.frame(screen: screen, notch: notch, left: 45, right: 60, drop: 12)
+        XCTAssertEqual(tall.height, 49, "reaches 12 pt below the notch")
+        XCTAssertEqual(tall.maxY, 1117, "still flush with the top")
+    }
+
+    func testShortcutUnitsInIntervals() {
+        XCTAssertEqual(ItemParser.parse("drink water every 40m").intervalSeconds, 2400)
+        XCTAssertEqual(ItemParser.parse("stretch every 2 hrs").intervalSeconds, 7200)
+        XCTAssertEqual(ItemParser.parse("stretch every 2h").intervalSeconds, 7200)
+        XCTAssertEqual(ItemParser.parse("blink every 30 sec").intervalSeconds, 30)
+        XCTAssertEqual(ItemParser.parse("blink every 30s").intervalSeconds, 30)
+        XCTAssertEqual(ItemParser.parse("drink water every 4 mins").intervalSeconds, 240)
+        XCTAssertEqual(ItemParser.parse("drink water every 40m").title, "Drink water")
+        XCTAssertEqual(ItemParser.parse("call mom every morning").kind, .goal, "no unit, no interval")
     }
 
     // MARK: - Firing
