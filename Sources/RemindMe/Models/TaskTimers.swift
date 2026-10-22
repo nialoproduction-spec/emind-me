@@ -111,6 +111,16 @@ struct TaskTimers: Codable, Equatable {
         store.value = timers
     }
 
+    /// Skip: drop the timer without counting it done. The next one still starts.
+    @MainActor
+    static func skip(_ id: UUID) {
+        var timers = store.value
+        let title = timers.entries.first { $0.id == id }?.title ?? ""
+        timers.markDone(id, now: .now)
+        store.value = timers
+        DeliveryLog.record(.unfinished, title: title, at: .now, detail: "Skipped")
+    }
+
     @MainActor
     static func notYet(_ id: UUID) {
         var timers = store.value

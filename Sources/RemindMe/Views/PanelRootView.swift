@@ -15,6 +15,7 @@ struct PanelRootView: View {
     @ObservedObject private var missed = AppSettings.missed
     @Query(sort: \Item.createdAt, order: .reverse) private var items: [Item]
     @Query(sort: \Occurrence.scheduledFireDate, order: .reverse) private var occurrences: [Occurrence]
+    @ObservedObject private var timers = TaskTimers.store
     @State private var showingSettings = false
     /// The reminder or summary that was on screen when the panel started to
     /// fade out, kept so the fade shows it rather than a sudden swap to the pill.
@@ -22,6 +23,7 @@ struct PanelRootView: View {
 
     private enum Layer {
         case live(Occurrence)
+        case timer(TaskTimers.Entry)
         case missed
         case goalCheckIn
         case endOfDay
@@ -32,6 +34,7 @@ struct PanelRootView: View {
 
     private var layer: Layer {
         if let occurrence = scheduler.activeOccurrence { return .live(occurrence) }
+        if let entry = timers.value.entries.first(where: { $0.state == .asking }) { return .timer(entry) }
         if scheduler.showMissed { return .missed }
         if scheduler.showGoalCheckIn { return .goalCheckIn }
         if scheduler.showEndOfDaySummary { return .endOfDay }
@@ -57,6 +60,10 @@ struct PanelRootView: View {
             case .live(let occurrence):
                 LiveReminderView(occurrence: occurrence, theme: themeStore.theme)
                     .id(occurrence.id) // fresh face + reaction state for every reminder
+                    .transition(.opacity)
+            case .timer(let entry):
+                TimerAskView(entry: entry, theme: themeStore.theme)
+                    .id(entry.id)
                     .transition(.opacity)
             case .missed:
                 MissedView(entries: missed.value.entries, theme: themeStore.theme,

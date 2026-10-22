@@ -102,4 +102,15 @@ final class TaskTimerTests: XCTestCase {
         XCTAssertEqual(TimerRequest.parseAll("edit 1.5 min").count, 0)
         XCTAssertEqual(TimerRequest.parseAll("edit video 1.5 min, write 2 min").map(\.seconds), [90, 120])
     }
+
+    func testSkipStartsTheNextTimerWithoutCountingItDone() {
+        var timers = TaskTimers()
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        timers.start(title: "Drink water", category: nil, seconds: 60, at: t0)
+        timers.start(title: "Edit", category: nil, seconds: 60, at: t0)
+        let first = timers.entries.last!
+        let second = timers.entries.first!
+        timers.markDone(first.id, now: t0.addingTimeInterval(60))
+        XCTAssertEqual(timers.current?.id, second.id)
+    }
 }
