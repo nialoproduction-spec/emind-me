@@ -19,6 +19,12 @@ final class TaskTimerTests: XCTestCase {
         }
     }
 
+    func testDrinkWaterWithinFortyMinutesIsATimer() {
+        let parsed = ItemParser.parse("drink water within 40 minute", now: .now)
+        XCTAssertEqual(parsed.timer?.seconds, 2400)
+        XCTAssertEqual(parsed.timer?.title, "Drink water")
+    }
+
     func testReminderPhrasesAreNotTimers() {
         for text in ["in 2 hours", "remind me in 20 min to check the export",
                      "drink water every 40 minutes", "Nov 5 at 10am", "tomorrow 3pm", "pay rent on the 1st"] {

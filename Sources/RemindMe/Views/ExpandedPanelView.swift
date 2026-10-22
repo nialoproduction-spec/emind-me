@@ -636,7 +636,7 @@ struct ExpandedPanelView: View {
 
     private func saveConfirmed() {
         guard let pending = draft.preview else { return }
-        if let timer = pending.timer {
+        if let timer = pending.timer, draft.chosen == nil {
             // "choosing music within 30 min": counts down in the Timers section.
             TaskTimers.start(timer, category: pending.category)
         } else if let cycle = pending.breakCycle {
@@ -862,11 +862,17 @@ struct TypePicker: View {
             } else {
                 ForEach(ItemType.allCases, id: \.self) { type in
                     let enabled = preview.map { type == .goal || $0.hasSchedule } ?? false
-                    let lit = preview?.type == type
+                    let lit = preview?.type == type && preview?.timer == nil
                     chip(icon: lit ? Self.filledIcon(type) : type.icon, lit: lit, enabled: enabled,
                          help: Self.help(type, enabled: enabled)) { onPick(type) }
                         .keyboardShortcut(type == .habit ? KeyboardShortcut(.return, modifiers: .command) : nil)
                 }
+                // A timer ("drink water within 40 min") has its own button: it counts
+                // down in the Timers section, then asks if it's done.
+                let timing = preview?.timer != nil
+                chip(icon: timing ? "timer.circle.fill" : "timer", lit: timing, enabled: timing,
+                     help: timing ? "Timer: counts down, then asks if it's done"
+                                  : "Timer: add “within 40 min” to the text first") {}
             }
         }
         .padding(2)
