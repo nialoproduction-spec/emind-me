@@ -46,4 +46,11 @@ final class HealthCheckTests: XCTestCase {
         XCTAssertEqual(log.entries.count, RepairLog.limit)
         XCTAssertEqual(log.entries.first?.text, "repair \(RepairLog.limit + 4)")
     }
+
+    func testSleepIsNoticedOnlyAfterALongGap() {
+        let t = Date(timeIntervalSince1970: 1_000)
+        XCTAssertFalse(ReminderScheduler.wasAsleep(lastTick: nil, now: t))
+        XCTAssertFalse(ReminderScheduler.wasAsleep(lastTick: t, now: t.addingTimeInterval(5)))
+        XCTAssertTrue(ReminderScheduler.wasAsleep(lastTick: t, now: t.addingTimeInterval(600)))
+    }
 }

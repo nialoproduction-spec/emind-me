@@ -73,7 +73,10 @@ final class ReminderScheduler: ObservableObject {
 
     private var modelContext: ModelContext?
     private var tickTimer: Timer?
-    private var wakeObserver: NSObjectProtocol?
+    private var wakeObservers: [NSObjectProtocol] = []
+    private var wakeCatchUp: Task<Void, Never>?
+    /// When the last check ran; a long gap means the Mac was asleep or off.
+    private var lastTickAt: Date?
     private var spaceObserver: NSObjectProtocol?
 
     /// Short enough for reminders every few seconds; the tick is only a few
@@ -154,11 +157,22 @@ final class ReminderScheduler: ObservableObject {
         }
         // Block-based observer: no Objective-C selector, nothing to unregister
         // by hand while the scheduler lives for the whole app session.
-        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        // Wake, screens back on, the user's session back, and Low Power Mode
+        // changes all re-check at once: a reminder that came due while the Mac
+        // slept lands on the "You missed" list without waiting for a restart.
+        let workspace = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didWakeNotification,
+                     NSWorkspace.screensDidWakeNotification,
+                     NSWorkspace.sessionDidBecomeActiveNotification] {
+            wakeObservers.append(workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.caughtUpAfterWake() }
+            })
+        }
+        wakeObservers.append(NotificationCenter.default.addObserver(
+            forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main
         ) { [weak self] _ in
             Task { @MainActor in self?.tick() }
-        }
+        })
         // Full-screen apps live in their own Space: re-check right away when
         // the Space changes, so a waiting reminder tucks away (or comes back)
         // promptly instead of on the next 20-second tick.
@@ -196,9 +210,34 @@ final class ReminderScheduler: ObservableObject {
 
     // MARK: - Tick
 
+    /// Called on wake. Checks now, logs a long sleep, and checks again a few
+    /// seconds later, once the clock and network have settled.
+    private func caughtUpAfterWake() {
+        let now = clock()
+        if Self.wasAsleep(lastTick: lastTickAt, now: now), let lastTickAt {
+            let minutes = Int(now.timeIntervalSince(lastTickAt) / 60)
+            HealthMonitor.log.value.add("Mac was asleep or off for \(minutes) min; checked for reminders that came due", at: now)
+        }
+        tick()
+        wakeCatchUp?.cancel()
+        wakeCatchUp = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            self.tick()
+        }
+    }
+
+    /// The tick runs every few seconds, so a gap of a minute or more means the
+    /// Mac was asleep (or off) in between.
+    nonisolated static func wasAsleep(lastTick: Date?, now: Date) -> Bool {
+        guard let lastTick else { return false }
+        return now.timeIntervalSince(lastTick) > 60
+    }
+
     func tick() {
         guard let modelContext else { return }
         let now = clock()
+        lastTickAt = now
         let suppressed = shouldSuppress()
         let away = isAway()
         updateSuspension(suppressed: suppressed)
