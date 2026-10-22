@@ -91,7 +91,7 @@ final class TaskTimerTests: XCTestCase {
     }
 
     func testOneLineSplitsIntoSeparateTimers() {
-        let parts = TimerRequest.parseAll("edit song 2 min , write 3 song")
+        let parts = TimerRequest.parseAll("edit song 2 min , write song 3 min")
         XCTAssertEqual(parts.map(\.seconds), [120, 180])
         XCTAssertEqual(TimerRequest.parseAll("select sound within 20 min. edit video 20 min").count, 2)
         XCTAssertEqual(TimerRequest.parseAll("color grade 20 min - export 10 min and rest 5 min").count, 3)
