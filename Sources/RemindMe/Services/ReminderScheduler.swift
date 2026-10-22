@@ -438,7 +438,7 @@ final class ReminderScheduler: ObservableObject {
             return NoticeContent(title: "\(entry.title): done?", detail: "Time's up",
                                  face: .furious, tone: .away, sticky: true)
         case .overdue:
-            return NoticeContent(title: entry.title, countUpFrom: entry.endsAt,
+            return NoticeContent(title: entry.title, countUpFrom: entry.overdueAt ?? entry.endsAt,
                                  face: .furious, tone: .away, sticky: true)
         default:
             return NoticeContent(title: entry.title, countdownTo: entry.endsAt,

@@ -17,6 +17,8 @@ struct TaskTimers: Codable, Equatable {
         var state: State = .running
         /// When it reached zero and asked.
         var askedAt: Date?
+        /// When it turned red (no answer for `patience`). Overtime counts from here.
+        var overdueAt: Date?
 
         var endsAt: Date { startedAt.addingTimeInterval(seconds) }
     }
@@ -63,6 +65,7 @@ struct TaskTimers: Codable, Equatable {
                 result.asking.append(entries[index])
             case .asking where now.timeIntervalSince(entries[index].askedAt ?? now) >= Self.patience:
                 entries[index].state = .overdue
+                entries[index].overdueAt = now
                 result.overdue.append(entries[index])
             default:
                 break

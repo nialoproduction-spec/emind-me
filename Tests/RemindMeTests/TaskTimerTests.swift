@@ -113,4 +113,17 @@ final class TaskTimerTests: XCTestCase {
         timers.markDone(first.id, now: t0.addingTimeInterval(60))
         XCTAssertEqual(timers.current?.id, second.id)
     }
+
+    func testOvertimeCountsFromTheMomentItTurnsRed() {
+        var timers = TaskTimers()
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        timers.start(title: "Drink water", category: nil, seconds: 60, at: t0)
+        let zero = t0.addingTimeInterval(60)
+        _ = timers.advance(now: zero)
+        let red = zero.addingTimeInterval(TaskTimers.patience)
+        _ = timers.advance(now: red)
+        let entry = timers.entries[0]
+        XCTAssertEqual(entry.state, .overdue)
+        XCTAssertEqual(entry.overdueAt, red, "the red count starts at 0 when it turns red")
+    }
 }

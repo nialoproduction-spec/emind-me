@@ -42,7 +42,7 @@ private struct TaskTimerRow: View {
                 Button("Done") { TaskTimers.markDone(entry.id); ReminderScheduler.shared.timersChanged() }
                 Button("Not yet") { TaskTimers.notYet(entry.id) }
             case .overdue:
-                Text("+" + TaskTimers.clock(now.timeIntervalSince(entry.endsAt)))
+                Text("+" + TaskTimers.clock(now.timeIntervalSince(entry.overdueAt ?? entry.endsAt)))
                     .monospacedDigit()
                     .foregroundStyle(.red)
                 Button("Done") { TaskTimers.markDone(entry.id); ReminderScheduler.shared.timersChanged() }
