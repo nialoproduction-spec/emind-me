@@ -8,8 +8,8 @@ import SwiftUI
 /// middle, angry on the last — and each button gets a short reaction (happy
 /// hop / dozing off / crying) before the panel closes.
 ///
-/// Snooze opens a row of lengths (set in Settings → Smart). Keyboard: ⌃⌥D /
-/// ⌃⌥S / ⌃⌥K from any app, or Return / S / K while the card has focus.
+/// Snooze opens a row of lengths (set in Settings → Smart). Keyboard: ⌥D /
+/// ⌥S / ⌥K from any app (changeable in Settings → Smart), or Return / S / K while the card has focus.
 struct LiveReminderView: View {
     let occurrence: Occurrence
     let theme: PanelTheme

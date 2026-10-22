@@ -1,10 +1,10 @@
 import AppKit
 
-/// Hold Command on its own to talk. The panel opens, speech fills the add box,
-/// and letting go stops listening. Nothing is saved: the usual preview shows
-/// what the reminder will be, and you press Save.
+/// Hold the talk key (Option by default) on its own to talk. The panel opens,
+/// speech fills the add box, and letting go stops listening. Nothing is saved:
+/// the usual preview shows what the reminder will be, and you press Save.
 ///
-/// Watching Command from other apps needs the Input Monitoring permission.
+/// Watching modifier keys from other apps needs the Input Monitoring permission.
 /// macOS asks for it the first time.
 @MainActor
 final class VoiceHold {
@@ -13,7 +13,7 @@ final class VoiceHold {
     /// What a key event means for the hold, extracted before leaving the
     /// event callback.
     enum Input {
-        case modifiers(commandOnly: Bool)
+        case modifiers(NSEvent.ModifierFlags)
         case key
     }
 
@@ -42,24 +42,26 @@ final class VoiceHold {
 
     nonisolated static func input(for event: NSEvent) -> Input {
         if event.type == .keyDown { return .key }
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        let others: NSEvent.ModifierFlags = [.shift, .option, .control, .function]
-        return .modifiers(commandOnly: flags.contains(.command) && flags.intersection(others).isEmpty)
+        return .modifiers(event.modifierFlags.intersection(.deviceIndependentFlagsMask))
     }
 
     private func handle(_ input: Input) {
         switch input {
         case .key:
             hold.otherKeyPressed()
-        case .modifiers(let commandOnly):
-            if let event = hold.modifiersChanged(commandOnly: commandOnly, at: .now) {
+        case .modifiers(let flags):
+            // Only the talk key is down: no other modifier, and no key since.
+            let talk = KeyBindings.store.value.talk.flag
+            let onlyTalk = flags.contains(talk)
+                && flags.intersection([.command, .option, .control, .shift, .function]) == talk
+            if let event = hold.modifiersChanged(commandOnly: onlyTalk, at: .now) {
                 apply(event)
             }
-            if commandOnly { scheduleTick() } else { tick?.cancel() }
+            if onlyTalk { scheduleTick() } else { tick?.cancel() }
         }
     }
 
-    /// Checks again once the threshold has passed, in case Command is still held alone.
+    /// Checks again once the threshold has passed, in case the talk key is still held alone.
     private func scheduleTick() {
         tick?.cancel()
         tick = Task { @MainActor in

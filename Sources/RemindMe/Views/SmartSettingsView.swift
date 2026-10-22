@@ -20,6 +20,8 @@ struct SmartSettingsView: View {
     @State private var restoreResult: String?
 
     @ObservedObject private var deliveries = DeliveryLog.store
+    @ObservedObject private var keyBindings = KeyBindings.store
+    @State private var shortcutNote: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -460,26 +462,48 @@ struct SmartSettingsView: View {
     @ViewBuilder
     private var shortcutsSection: some View {
         Text("Keyboard shortcuts").font(.headline)
-        Toggle("Answer reminders from any app", isOn: $smart.value.globalShortcuts)
-        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 3) {
-            shortcutRow(.done, "Done")
-            shortcutRow(.snooze, "Snooze")
-            shortcutRow(.skip, "Skip")
+        Toggle("Use these shortcuts from any app", isOn: $smart.value.globalShortcuts)
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
+            ForEach(KeyBindings.Action.allCases) { action in
+                GridRow {
+                    ShortcutRecorder(binding: keyBindings.value[action]) { binding in
+                        changeShortcut(action, to: binding)
+                    }
+                    Text(action.title)
+                }
+            }
+            GridRow {
+                Picker("Talk key", selection: $keyBindings.value.talk) {
+                    ForEach(TalkKey.allCases) { key in
+                        Text(key.title).tag(key)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 150)
+                Text("Hold to talk")
+            }
         }
         .font(.callout)
         .foregroundStyle(smart.value.globalShortcuts ? Color.primary : Color.secondary)
-        Text("Only active while a reminder is on screen. When the reminder has focus, Return, S and K work too.")
+        if let shortcutNote {
+            Text(shortcutNote)
+                .font(.caption)
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        Text("Done, Snooze and Skip work only while a reminder is on screen. Undo works any time. Click a shortcut, then press the new keys. Hold the talk key on its own to speak a reminder.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    private func shortcutRow(_ action: ReminderScheduler.ShortcutAction, _ label: String) -> some View {
-        GridRow {
-            Text(GlobalHotkeys.label(for: action))
-                .font(.system(.callout, design: .monospaced))
-            Text(label)
+    private func changeShortcut(_ action: KeyBindings.Action, to binding: KeyBinding) {
+        if let other = keyBindings.value.conflict(for: binding, except: action) {
+            shortcutNote = "\(binding.display) is already used by \(other.title)."
+            return
         }
+        shortcutNote = nil
+        keyBindings.value[action] = binding
     }
 
     // MARK: - Categories

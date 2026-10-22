@@ -594,7 +594,7 @@ struct ExpandedPanelView: View {
                 Image(systemName: "mic.fill")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.red)
-                    .help("Listening. Let go of Command to stop.")
+                    .help("Listening. Let go of the talk key to stop.")
             }
             TextField(voice.isListening ? "Listening…" : "Drink water every 40 min", text: $draft.text)
                 .textFieldStyle(.plain)

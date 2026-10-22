@@ -332,7 +332,7 @@ struct SmartSettings: Codable, Equatable {
     var suggestionsEnabled = true
     /// Suggestions the user dismissed, so they don't come back.
     var dismissedSuggestions: [String] = []
-    /// ⌃⌥D / ⌃⌥S / ⌃⌥K answer the reminder on screen from any app.
+    /// ⌥D / ⌥S / ⌥K answer the reminder on screen from any app (keys set in KeyBindings).
     var globalShortcuts = true
 }
 
