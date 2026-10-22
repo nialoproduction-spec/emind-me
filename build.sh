@@ -52,6 +52,10 @@ AFTER=$(stat -f%z "${APP_DIR}/Contents/MacOS/${APP_NAME}" 2>/dev/null || echo 0)
 echo "   binary: ${BEFORE} -> ${AFTER} bytes"
 cp "Resources/Info.plist" "${APP_DIR}/Contents/Info.plist"
 
+# Launch agent: starts Remind Me at login and restarts it after a crash.
+mkdir -p "${APP_DIR}/Contents/Library/LaunchAgents"
+cp "Resources/com.anshukc.remindme.keepalive.plist" "${APP_DIR}/Contents/Library/LaunchAgents/"
+
 if [ -f "Resources/AppIcon.icns" ]; then
     cp "Resources/AppIcon.icns" "${APP_DIR}/Contents/Resources/AppIcon.icns"
 fi
