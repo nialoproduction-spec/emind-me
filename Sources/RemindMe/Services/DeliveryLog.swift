@@ -36,8 +36,10 @@ struct DeliveryLog: Codable, Equatable {
     }
 
     /// The log the app writes to.
+    @MainActor
     static let store = PersistedSettings<DeliveryLog>(key: "deliveryLog", default: DeliveryLog())
 
+    @MainActor
     static func record(_ step: Step, title: String, at now: Date, detail: String? = nil) {
         store.value.add(step, title: title, at: now, detail: detail)
     }

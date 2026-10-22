@@ -168,6 +168,7 @@ struct SmartSettingsView: View {
 
     // MARK: - Delivery log
 
+    @ViewBuilder
     private var deliverySection: some View {
         Text("Recent deliveries").font(.headline)
         let recent = Array(deliveries.value.entries.prefix(20))
