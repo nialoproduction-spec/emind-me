@@ -181,7 +181,7 @@ enum ItemParser {
         for match in matches.reversed() {
             let word = ns.substring(with: match.range).lowercased()
             guard word != "every", !["over", "even", "eve"].contains(word),
-                  editDistance(word, "every") <= 2 else { continue }
+                  word == "each" || editDistance(word, "every") <= 2 else { continue }
             result.replaceCharacters(in: match.range, with: "every")
         }
         return result as String
@@ -630,7 +630,7 @@ enum ItemParser {
     }
 
     private static let relativeRegex = try! NSRegularExpression(
-        pattern: #"\b(?:(?<after>day\s+after\s+tomorrow)|(?<tomorrow>tomorrow|tmrw|tmr|tomorow|tommorow|tommorrow)|(?<tonight>tonight|tonite)|(?<today>today))\b(?:\s+(?:morning|evening|night))?"#,
+        pattern: #"\b(?:(?<after>day\s+after\s+tomorrow)|(?<tomorrow>tomorrow|tmrw|tmr|tomorow|tommorow|tommorrow)|(?<tonight>tonight|tonite)|(?<today>today)|(?<nextday>next\s+(?<nweekday>mon|tue|wed|thu|fri|sat|sun)[a-z]*))\b(?:\s+(?:morning|evening|night))?"#,
         options: [.caseInsensitive]
     )
 
@@ -650,6 +650,16 @@ enum ItemParser {
             return (calendar.date(byAdding: .day, value: 1, to: today) ?? today, evening ? 19 : 9, match.range)
         }
         if has("tonight") { return (today, 20, match.range) }
+        if has("nextday") {
+            // "next monday": the coming one, never today.
+            let word = ns.substring(with: match.range(withName: "nweekday")).lowercased()
+            let targets = ["sun": 1, "mon": 2, "tue": 3, "wed": 4, "thu": 5, "fri": 6, "sat": 7]
+            let target = targets[word] ?? 2
+            let current = calendar.component(.weekday, from: today)
+            var ahead = (target - current + 7) % 7
+            if ahead == 0 { ahead = 7 }
+            return (calendar.date(byAdding: .day, value: ahead, to: today) ?? today, 9, match.range)
+        }
         return (today, evening ? 19 : 18, match.range)
     }
 
@@ -812,7 +822,7 @@ enum ItemParser {
     private static let unitWord = #"(?:sec[a-z]*|min[a-z]*|hou?r[a-z]*|hr[a-z]*|day[a-z]*|week[a-z]*|wk[a-z]*)"#
 
     private static let clockAtRegex = try! NSRegularExpression(
-        pattern: #"\bat\s+(?<hour>\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?:\s*:\s*(?<minute>\d{2}))?\s*(?<ampm>a\.?m\.?|p\.?m\.?|o'clock)?"#,
+        pattern: #"\bat\s+(?<hour>\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?:\s*[:.]\s*(?<minute>\d{2}))?\s*(?<ampm>a\.?m\.?|p\.?m\.?|o'clock)?"#,
         options: [.caseInsensitive]
     )
 

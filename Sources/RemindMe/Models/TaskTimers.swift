@@ -158,7 +158,10 @@ extension TimerRequest {
         // "in 2 hours" on its own is a one-time reminder, not a timer.
         let prepRange = match.range(withName: "prep")
         let prep = prepRange.location == NSNotFound ? "" : ns.substring(with: prepRange).lowercased()
-        if prep == "in", unit.hasPrefix("h") { return nil }
+        // "in 20 min" and "after 30 min" are reminders ("call mom in 20 min"),
+        // not countdowns. Timers take "within", "for", or no word at all.
+        if prep == "in" { return nil }
+        if rawTask.lowercased().hasSuffix(" after") { return nil }
         let seconds = quantity * ItemParser.unitSeconds(unit)
 
         let title = rawTask.prefix(1).uppercased() + rawTask.dropFirst()
