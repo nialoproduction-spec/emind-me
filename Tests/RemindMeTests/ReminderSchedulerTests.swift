@@ -538,7 +538,10 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertEqual(ItemParser.parse("blink every 30s").intervalSeconds, 30)
         XCTAssertEqual(ItemParser.parse("drink water every 4 mins").intervalSeconds, 240)
         XCTAssertEqual(ItemParser.parse("drink water every 40m").title, "Drink water")
-        XCTAssertEqual(ItemParser.parse("call mom every morning").kind, .goal, "no unit, no interval")
+        let morning = ItemParser.parse("call mom every morning")
+        XCTAssertNil(morning.intervalSeconds, "no unit, no interval")
+        XCTAssertEqual(morning.kind, .scheduledRoutine, "every morning is a daily time")
+        XCTAssertEqual(morning.hour, 8)
     }
 
     // MARK: - Firing

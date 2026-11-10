@@ -806,10 +806,10 @@ enum ItemParser {
                                                     withTemplate: template)
         }
         replace(#"\s*@\s*(?=\d)"#, " at ")
-        replace(#"\bhalf\s+past\s+(\d{1,2})\b"#, "$1:30")
-        replace(#"\bquarter\s+past\s+(\d{1,2})\b"#, "$1:15")
+        replace(#"\bhalf\s+past\s+(\d{1,2})(?!\d)"#, "$1:30")
+        replace(#"\bquarter\s+past\s+(\d{1,2})(?!\d)"#, "$1:15")
         // "quarter to 7" → "6:45"
-        if let regex = try? NSRegularExpression(pattern: #"\bquarter\s+to\s+(\d{1,2})\b"#, options: [.caseInsensitive]) {
+        if let regex = try? NSRegularExpression(pattern: #"\bquarter\s+to\s+(\d{1,2})(?!\d)"#, options: [.caseInsensitive]) {
             let ns = result as NSString
             for match in regex.matches(in: result, range: NSRange(location: 0, length: ns.length)).reversed() {
                 guard let hour = Int(ns.substring(with: match.range(at: 1))), (1...24).contains(hour) else { continue }
@@ -821,6 +821,7 @@ enum ItemParser {
         replace(#"\b(\d{1,2}(?:[:.]\d{2})?)\s+(?:o'?clock\s+)?in\s+the\s+(?:afternoon|evening)\b"#, "$1pm")
         replace(#"\b(\d{1,2}(?:[:.]\d{2})?)\s+(?:o'?clock\s+)?(?:at|in\s+the)\s+night\b"#, "$1pm")
         replace(#"\bmid-?day\b"#, "noon")
+        replace(#"\bthis\s+(morning|afternoon|evening)\b"#, "today $1")
         replace(#"\bhourly\b"#, "every hour")
         replace(#"\bevery\s+half\s+(?:an\s+)?hour\b"#, "every 30 minutes")
         replace(#"\bevery\s+quarter\s+(?:of\s+an\s+)?hour\b"#, "every 15 minutes")
@@ -968,6 +969,13 @@ enum ItemParser {
            let word = part(match, "p") ?? part(match, "p2") ?? part(match, "p3") {
             rules.partHour = ["morning": 8, "afternoon": 14, "evening": 19, "night": 21][word]
             blank(match.range)
+        } else if let match = dayPartRegex.firstMatch(in: rules.text, range: full()),
+                  let word = part(match, "p") {
+            // "tomorrow morning", "today evening": the day stays for the date rules.
+            rules.partHour = ["morning": 8, "afternoon": 14, "evening": 19, "night": 21][word]
+            blank(match.range(withName: "p"))
+        } else if tonightRegex.firstMatch(in: rules.text, range: full()) != nil {
+            rules.partHour = 20 // "call mom tonight": a time, so a reminder, not a goal
         }
         return rules
     }
@@ -1024,6 +1032,13 @@ enum ItemParser {
     private static let timesPerDayRegex = try! NSRegularExpression(
         pattern: #"\b(?<n>once|twice|thrice|two\s+times|three\s+times|four\s+times|[1-4]\s*(?:x|times))\s+(?:a|per|each|every)\s+day\b|\b(?<n2>once|twice|thrice)\s+daily\b"#,
         options: [.caseInsensitive])
+
+    private static let dayPartRegex = try! NSRegularExpression(
+        pattern: #"\b(?:tomorrow|tmrw|tmr|today)\s+(?:in\s+the\s+)?(?<p>morning|afternoon|evening|night)\b"#,
+        options: [.caseInsensitive])
+
+    private static let tonightRegex = try! NSRegularExpression(
+        pattern: #"\b(?:tonight|tonite)\b"#, options: [.caseInsensitive])
 
     private static let partOfDayRegex = try! NSRegularExpression(
         pattern: #"\b(?:every|each)\s+(?<p>morning|afternoon|evening|night)\b|\b(?<p2>morning|afternoon|evening|night)s\b|\b(?:in\s+the|at)\s+(?<p3>morning|afternoon|evening|night)\b"#,
@@ -1146,7 +1161,7 @@ enum ItemParser {
         options: [.caseInsensitive]
     )
 
-    private static let unitWord = #"(?:sec[a-z]*|min[a-z]*|hou?r[a-z]*|hr[a-z]*|day[a-z]*|week[a-z]*|wk[a-z]*)"#
+    private static let unitWord = #"(?:sec[a-z]*|min[a-z]*|hou?r[a-z]*|hr[a-z]*|day[a-z]*|week(?!day|end|night)[a-z]*|wk[a-z]*)"#
 
     private static let clockAtRegex = try! NSRegularExpression(
         pattern: #"\bat\s+(?<hour>\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?:\s*[:.]\s*(?<minute>\d{2}))?\s*(?<ampm>a\.?m\.?|p\.?m\.?|o'clock)?"#,
