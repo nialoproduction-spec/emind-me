@@ -664,7 +664,7 @@ enum ItemParser {
     }
 
     private static let inDurationRegex = try! NSRegularExpression(
-        pattern: #"\bin\s+(?:(?<qty>\d+(?:\.\d+)?)\s*(?<unit>sec[a-z]*|min[a-z]*|hou?r[a-z]*|hrs?|day[a-z]*|week[a-z]*|wk[a-z]*|s|m|h|d|w)|(?<wqty>half\s+an?|an?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|forty-five|fifty|sixty)\s+(?<wunit>sec[a-z]*|min[a-z]*|hou?r[a-z]*|hrs?|day[a-z]*|week[a-z]*|wk[a-z]*))\b"#,
+        pattern: #"\b(?:in|after)\s+(?:(?<qty>\d+(?:\.\d+)?)\s*(?<unit>sec[a-z]*|min[a-z]*|hou?r[a-z]*|hrs?|day[a-z]*|week[a-z]*|wk[a-z]*|s|m|h|d|w)|(?<wqty>half\s+an?|an?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|forty-five|fifty|sixty)\s+(?<wunit>sec[a-z]*|min[a-z]*|hou?r[a-z]*|hrs?|day[a-z]*|week[a-z]*|wk[a-z]*))\b"#,
         options: [.caseInsensitive]
     )
 
