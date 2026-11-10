@@ -186,3 +186,14 @@ Design/, scripts/trace_faces.py  source art + the tracer that generated Faces/Fa
   sensitive) goes to phase `.waiting` (red, angry "Come back!" count-up at the notch); the next work stretch starts counting at the first key press / mouse move (idle ≤ 2 s).
   The idle time is injected (`idleSeconds:`) so tests never read the real one.
 - A menu bar click opens the list directly (`openMainPage`), not the small pill.
+- Extra schedule rules live in `Item.extrasData` (JSON `ScheduleExtras`, Models/ScheduleExtras.swift): active hours for
+  intervals ("every 40 min from 9am to 6pm"), several times a day ("at 9am and 9pm", "twice a day"), every N days / weeks
+  at a time ("every other day at 7am", "every other friday", "biweekly on friday"), Nth weekday ("first monday of the
+  month", "last friday"), and an end date ("for 7 days", "until Dec 1"; the tick ends it). Date maths is `ScheduleMath`
+  (pure, tested in ScheduleExtrasTests). Interval reminders honour their weekdays. Items with rules, intervals on some
+  days only, or the 29th–31st get one notification at `nextFireDate`, renewed after each firing
+  (`usesOneShotNotification`). The editor doesn't show the rules; changing an item's kind drops them.
+- The parser reads the rules first (`scheduleRules`, blanking what it used), after `normalizePhrases` rewrites everyday
+  wording ("half past 6", "6 in the evening", "hourly", "every other", "fortnightly", "last day of the month", "@").
+  "every morning/afternoon/evening/night" = 8/14/19/21 daily; "tomorrow morning", "tonight" count as times.
+  `ReminderPhrasingTests` is the table of phrasings that must work: add a line for every new one.
