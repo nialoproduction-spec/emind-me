@@ -110,6 +110,24 @@ final class Item {
     /// Set when it's over: a one-time reminder has fired, a deadline is past
     /// or delivered. It drops out of the lists (history and backups keep it).
     var endedAt: Date?
+    /// More schedule rules (active hours, several times, every N days or
+    /// weeks, Nth weekday, end date) as JSON `ScheduleExtras`. Nil = none.
+    var extrasData: Data?
+
+    var extras: ScheduleExtras {
+        get { extrasData.flatMap { try? JSONDecoder().decode(ScheduleExtras.self, from: $0) } ?? ScheduleExtras() }
+        set { extrasData = newValue.isEmpty ? nil : try? JSONEncoder().encode(newValue) }
+    }
+
+    /// Its notification is a single one at the next due time, renewed after
+    /// each firing, because no repeating pattern can say it (active hours,
+    /// every other day, the 31st in a short month, interval on some days only).
+    var usesOneShotNotification: Bool {
+        if !extras.isEmpty { return true }
+        if kind == .repeatingRoutine, weekdaysRaw?.isEmpty == false { return true }
+        if let monthDay, monthDay > 28 { return true }
+        return false
+    }
 
     var kind: ItemKind {
         get { ItemKind(rawValue: kindRaw) ?? .goal }
@@ -176,6 +194,9 @@ final class Item {
             monthDay = parsed.monthDay
             yearMonth = parsed.yearMonth
             dueDate = parsed.dueDate
+            var rules = parsed.extras
+            if rules.dayStep != nil || rules.weekStep != nil, rules.anchor == nil { rules.anchor = now }
+            extras = rules
         }
         nextFireDate = computeNextFireDate(after: now)
         // A one-time reminder for a moment that's just gone: it fires right away.
@@ -205,13 +226,25 @@ final class Item {
     /// Routines only — always nil for goals.
     func computeNextFireDate(after reference: Date = .now, calendar: Calendar = .current) -> Date? {
         guard endedAt == nil else { return nil }
+        let rules = extras
+        guard let next = baseNextFireDate(after: reference, rules: rules, calendar: calendar) else { return nil }
+        if let ends = rules.endsOn, next > ends { return nil }
+        return next
+    }
+
+    private func baseNextFireDate(after reference: Date, rules: ScheduleExtras, calendar: Calendar) -> Date? {
         switch kind {
         case .goal:
             return nil
 
         case .repeatingRoutine:
             guard let interval = intervalSeconds, interval > 0 else { return nil }
-            return reference.addingTimeInterval(interval)
+            let raw = reference.addingTimeInterval(interval)
+            let days = Set(weekdaysRaw ?? [])
+            guard rules.hasWindow || !days.isEmpty else { return raw }
+            // Active hours / some days only: outside them it waits for the next opening.
+            return ScheduleMath.fit(raw, start: rules.windowStart, end: rules.windowEnd,
+                                    weekdays: days, calendar: calendar)
 
         case .scheduledRoutine:
             if let dueDate {
@@ -224,6 +257,11 @@ final class Item {
                                         after: reference, calendar: calendar)
             }
             guard let hour, let minute else { return nil }
+            if rules.needsDayScan {
+                return ScheduleMath.nextClock(times: [hour * 60 + minute] + (rules.extraTimes ?? []),
+                                              weekdays: Set(weekdaysRaw ?? []), extras: rules,
+                                              after: reference, calendar: calendar)
+            }
             let allowedWeekdays: Set<Int> = (weekdaysRaw?.isEmpty == false) ? Set(weekdaysRaw!) : Set(1...7)
             // Scan forward up to a week to find the next day that matches
             // both the weekday filter and is still ahead of `reference`.
@@ -376,7 +414,7 @@ final class Item {
         switch kind {
         case .repeatingRoutine:
             guard let interval = intervalSeconds else { return "" }
-            return "every \(Self.durationString(interval))"
+            return ScheduleExtras.intervalLine(interval: interval, weekdays: weekdaysRaw ?? [], extras: extras)
         case .scheduledRoutine:
             if let special = Self.specialSummary(repeat: repeatKind, onceAt: onceAt, monthDay: monthDay,
                                                  yearMonth: yearMonth, dueDate: dueDate,
@@ -384,13 +422,7 @@ final class Item {
                 return special
             }
             guard let hour, let minute else { return "" }
-            let time = Self.clockTimeString(hour: hour, minute: minute)
-            let days = weekdaysRaw ?? []
-            if days.isEmpty || days.count == 7 {
-                return "\(time) · Daily"
-            }
-            let names = days.sorted().map { Self.weekdaySymbols[$0] }.joined(separator: ", ")
-            return "\(time) · \(names)"
+            return ScheduleExtras.clockLine(hour: hour, minute: minute, weekdays: weekdaysRaw ?? [], extras: extras)
         case .goal:
             guard let targetDate else { return "" }
             return "by \(Self.dateFormatter.string(from: targetDate))"

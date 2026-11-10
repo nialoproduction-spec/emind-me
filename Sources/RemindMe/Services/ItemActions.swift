@@ -133,6 +133,8 @@ enum ItemActions {
             || edit.hour != item.hour || edit.minute != item.minute
             || edit.weekdays.sorted() != (item.weekdaysRaw ?? []).sorted()
 
+        // The editor only knows plain schedules: a new kind drops the extra rules.
+        let kindChanged = edit.kind != item.kind
         item.title = edit.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let category = edit.category?.trimmingCharacters(in: .whitespacesAndNewlines)
         item.category = (category?.isEmpty ?? true) ? nil : category
@@ -169,6 +171,7 @@ enum ItemActions {
             clearDates(of: item)
         }
 
+        if kindChanged { item.extrasData = nil }
         if scheduleChanged { item.scheduleEditedAt = now }
         if edit.kind != .goal, scheduleChanged || item.nextFireDate == nil, item.isActive {
             item.nextFireDate = item.computeNextFireDate(after: now)

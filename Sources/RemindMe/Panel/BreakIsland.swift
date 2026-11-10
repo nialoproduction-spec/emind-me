@@ -531,6 +531,8 @@ final class BreakIslandController {
     private var state: BreakCycleState?
     /// A moment being shown on top of the usual state (for its duration).
     private var peek: NoticeContent?
+    /// The moment on screen now (nil = just the break timer, or nothing).
+    var peekID: UUID? { peek?.id }
     private var peekTask: Task<Void, Never>?
     private var generation = 0
     private var observers: [Any] = []

@@ -77,6 +77,7 @@ final class ReminderScheduler: ObservableObject {
     private var wakeCatchUp: Task<Void, Never>?
     /// The timer last shown at the notch (id and state), so it's only redrawn on change.
     private var shownTimerKey: String?
+    private var shownTimerNoticeID: UUID?
     /// When the last check ran; a long gap means the Mac was asleep or off.
     private var lastTickAt: Date?
     private var spaceObserver: NSObjectProtocol?
@@ -262,6 +263,11 @@ final class ReminderScheduler: ObservableObject {
                 item.endedAt = now
                 item.nextFireDate = nil
             }
+            // "for 7 days", "until Dec 1": over once its last day is done.
+            if let ends = item.extras.endsOn, now > ends {
+                item.endedAt = now
+                item.nextFireDate = nil
+            }
         }
 
         // Timed pauses that have run out resume on their own.
@@ -322,6 +328,9 @@ final class ReminderScheduler: ObservableObject {
         // One-time: it has had its moment, so it leaves the list (its card
         // still waits for an answer).
         if item.onceAt != nil { item.endedAt = current }
+        // A single notification (or an interval one, so it doesn't drift)
+        // is set up again for the next time.
+        if item.usesOneShotNotification || item.kind == .repeatingRoutine { resumed(item) }
 
         attemptPresent(occurrence, held: held)
     }
@@ -419,17 +428,23 @@ final class ReminderScheduler: ObservableObject {
 
     /// The running timer at the notch: a countdown, then "done?", then red and counting up.
     private func showTimerAtNotch() {
+        let island = BreakIslandController.shared
         guard let entry = TaskTimers.store.value.current else {
             if shownTimerKey != nil {
                 shownTimerKey = nil
-                BreakIslandController.shared.hide()
+                // Only take down our own countdown, never a break-timer moment.
+                if island.peekID == shownTimerNoticeID { island.hide() }
             }
             return
         }
         let key = "\(entry.id)-\(entry.state.rawValue)"
-        guard key != shownTimerKey else { return }
+        // Same timer and state: leave it, unless a break-timer moment pushed
+        // it off and has since gone; then it comes back.
+        if key == shownTimerKey, island.peekID != nil { return }
         shownTimerKey = key
-        BreakIslandController.shared.show(Self.timerNotice(for: entry))
+        let notice = Self.timerNotice(for: entry)
+        shownTimerNoticeID = notice.id
+        island.show(notice)
     }
 
     nonisolated static func timerNotice(for entry: TaskTimers.Entry) -> NoticeContent {

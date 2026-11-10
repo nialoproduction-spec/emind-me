@@ -33,6 +33,7 @@ enum Backup {
         var yearMonth: Int?
         var dueDate: Date?
         var endedAt: Date?
+        var extrasData: Data?
 
         init(_ item: Item) {
             id = item.id
@@ -56,6 +57,7 @@ enum Backup {
             yearMonth = item.yearMonth
             dueDate = item.dueDate
             endedAt = item.endedAt
+            extrasData = item.extrasData
         }
 
         func makeItem() -> Item {
@@ -72,6 +74,7 @@ enum Backup {
             item.yearMonth = yearMonth
             item.dueDate = dueDate
             item.endedAt = endedAt
+            item.extrasData = extrasData
             return item
         }
     }

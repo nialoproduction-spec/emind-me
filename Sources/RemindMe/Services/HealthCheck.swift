@@ -24,7 +24,10 @@ struct RepairLog: Codable, Equatable {
 enum ScheduleAudit {
     /// Should this item have a notification waiting? Active habits that aren't finished.
     static func needsNotification(_ item: Item) -> Bool {
-        item.kind != .goal && item.isActive && item.style == .habit && !item.isOver
+        guard item.kind != .goal, item.isActive, item.style == .habit, !item.isOver else { return false }
+        // A single notification exists only while its time is still ahead.
+        if item.usesOneShotNotification { return (item.nextFireDate ?? .distantPast) > .now }
+        return true
     }
 
     /// Items that should have a notification but have none pending. Every

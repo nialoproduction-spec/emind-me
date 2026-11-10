@@ -23,6 +23,10 @@ final class NotificationService {
         cancel(for: item)
         // Reminders use the little popup instead (no duplicate banner).
         guard item.kind != .goal, item.isActive, item.style == .habit else { return }
+        if item.usesOneShotNotification {
+            scheduleOnce(item)
+            return
+        }
 
         switch item.kind {
         case .repeatingRoutine:
@@ -39,6 +43,16 @@ final class NotificationService {
         var identifiers = [item.id.uuidString]
         identifiers += (1...7).map { "\(item.id.uuidString).\($0)" }
         center.removePendingNotificationRequests(withIdentifiers: identifiers)
+    }
+
+    /// One notification at the next due time. The scheduler renews it after
+    /// each firing (and the self-check if it ever goes missing).
+    private func scheduleOnce(_ item: Item) {
+        guard let next = item.nextFireDate, next > .now, !item.isOver else { return }
+        let comps = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: next)
+        let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)
+        let request = UNNotificationRequest(identifier: item.id.uuidString, content: makeContent(for: item), trigger: trigger)
+        UNUserNotificationCenter.current().add(request)
     }
 
     private func scheduleRepeating(_ item: Item) {

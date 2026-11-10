@@ -105,6 +105,8 @@ final class MigrationTests: XCTestCase {
         XCTAssertNil(item.yearMonth)
         XCTAssertNil(item.dueDate)
         XCTAssertNil(item.endedAt)
+        XCTAssertNil(item.extrasData, "older stores open with no extra rules")
+        XCTAssertTrue(item.extras.isEmpty)
         XCTAssertEqual(item.repeatKind, .daily)
         XCTAssertFalse(item.isOver)
 

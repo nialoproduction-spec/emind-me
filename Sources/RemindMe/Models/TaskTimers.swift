@@ -84,9 +84,11 @@ struct TaskTimers: Codable, Equatable {
     }
 
     /// "Not yet": it keeps counting on, now in red.
-    mutating func notYet(_ id: UUID) {
+    mutating func notYet(_ id: UUID, now: Date = .now) {
         guard let index = entries.firstIndex(where: { $0.id == id }), entries[index].state != .done else { return }
         entries[index].state = .overdue
+        // The red count starts now, at +0:00.
+        if entries[index].overdueAt == nil { entries[index].overdueAt = now }
     }
 
     /// "12:05" or "1:02:05".

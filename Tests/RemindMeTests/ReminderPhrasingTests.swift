@@ -18,6 +18,50 @@ final class ReminderPhrasingTests: XCTestCase {
         var oneTime = false
         var timer = false
         var title: String? = nil
+        /// Any other check: returns a problem, or nil when it's right.
+        var check: ((ParsedItem) -> String?)? = nil
+    }
+
+    private static func rule(_ text: String, _ kind: ItemKind = .scheduledRoutine,
+                             _ check: @escaping (ParsedItem) -> String?) -> Expect {
+        Expect(text: text, kind: kind, check: check)
+    }
+
+    /// "9:00 AM, 9:00 PM": first time and the extra ones, in minutes.
+    private static func times(_ text: String, _ first: Int, _ extra: [Int], title: String? = nil) -> Expect {
+        Expect(text: text, kind: .scheduledRoutine, hour: first / 60, minute: first % 60, title: title) { p in
+            (p.extras.extraTimes ?? []) == extra ? nil : "extra times \(p.extras.extraTimes ?? []) want \(extra)"
+        }
+    }
+
+    private static func window(_ text: String, every seconds: Double, _ start: Int, _ end: Int,
+                               days: Set<Int>? = nil) -> Expect {
+        Expect(text: text, kind: .repeatingRoutine, interval: seconds, weekdays: days) { p in
+            (p.extras.windowStart == start && p.extras.windowEnd == end) ? nil
+                : "window \(String(describing: p.extras.windowStart))–\(String(describing: p.extras.windowEnd)) want \(start)–\(end)"
+        }
+    }
+
+    private static func monthWeek(_ text: String, _ nth: Int, _ day: Int, hour: Int = 9) -> Expect {
+        Expect(text: text, kind: .scheduledRoutine, hour: hour, weekdays: [day]) { p in
+            p.extras.monthWeek == nth ? nil : "monthWeek \(String(describing: p.extras.monthWeek)) want \(nth)"
+        }
+    }
+
+    private static func step(_ text: String, days: Int? = nil, weeks: Int? = nil, hour: Int,
+                             weekdays: Set<Int>? = nil) -> Expect {
+        Expect(text: text, kind: .scheduledRoutine, hour: hour, weekdays: weekdays) { p in
+            if p.extras.dayStep != days { return "dayStep \(String(describing: p.extras.dayStep)) want \(String(describing: days))" }
+            if p.extras.weekStep != weeks { return "weekStep \(String(describing: p.extras.weekStep)) want \(String(describing: weeks))" }
+            return nil
+        }
+    }
+
+    private static func ends(_ text: String, _ kind: ItemKind = .scheduledRoutine, hour: Int? = nil,
+                             interval: Double? = nil) -> Expect {
+        Expect(text: text, kind: kind, hour: hour, interval: interval) { p in
+            p.extras.endsOn == nil ? "no end date" : nil
+        }
     }
 
     private static func every(_ text: String, _ seconds: Double, title: String? = nil) -> Expect {
@@ -154,6 +198,121 @@ final class ReminderPhrasingTests: XCTestCase {
         at("wake up at 7am", 7),
         at("call mom at 6pm please", 18, title: "call mom"),
 
+        // ---- Batch 2 ----
+
+        // Part of the day and clock words
+        at("take pills every morning", 8, days: [], title: "take pills"),
+        at("take pills every afternoon", 14),
+        at("take pills every evening", 19),
+        at("take pills every night", 21),
+        at("take pills at night", 21, title: "take pills"),
+        at("walk mornings", 8),
+        at("walk every night at 10pm", 22),
+        at("call mom at 6 in the evening", 18),
+        at("wake up at 7 in the morning", 7),
+        at("call mom at 10 at night", 22),
+        at("call mom at half past 6pm", 18, 30),
+        at("call mom at quarter past 9am", 9, 15),
+        at("call mom at quarter to 7pm", 18, 45),
+        at("lunch at midday", 12),
+        at("call mom at 12am", 0),
+        at("call mom at 12pm", 12),
+        at("call mom at midnight", 0),
+        Expect(text: "call mom @ 6pm", kind: .scheduledRoutine, hour: 18) { p in
+            p.title.contains("@") ? "title '\(p.title)' keeps @" : nil
+        },
+
+        // More intervals
+        every("drink water hourly", 60 * 60),
+        every("drink water every half hour", 30 * 60),
+        every("drink water every half an hour", 30 * 60),
+        every("drink water every quarter hour", 15 * 60),
+        every("drink water every 90 minutes", 90 * 60),
+        every("drink water every 1.5 hours", 90 * 60),
+        every("water plants every other day", 2 * 86_400),
+
+        // Active hours, some days only
+        window("drink water every 40 min from 9am to 6pm", every: 2400, 540, 1080),
+        window("drink water every hour between 9 and 5", every: 3600, 540, 1020),
+        window("drink water every hour 9am-6pm", every: 3600, 540, 1080),
+        window("drink water every 30 min from 10 to 6pm", every: 1800, 600, 1080),
+        window("drink water every hour from 2 to 6pm", every: 3600, 840, 1080),
+        window("drink water every hour from 9am to 5pm on weekdays", every: 3600, 540, 1020, days: [2, 3, 4, 5, 6]),
+        Expect(text: "stretch every hour on weekdays", kind: .repeatingRoutine, interval: 3600, weekdays: [2, 3, 4, 5, 6]),
+
+        // Several times a day
+        times("take pills at 9am and 9pm", 540, [1260], title: "take pills"),
+        times("take pills at 8am, 1pm and 8pm", 480, [780, 1200], title: "take pills"),
+        times("take pills twice a day", 540, [1260], title: "take pills"),
+        times("take pills twice daily", 540, [1260]),
+        times("take pills 3 times a day", 480, [840, 1200]),
+        times("take pills three times a day", 480, [840, 1200]),
+        times("take pills once a day", 540, []),
+
+        // Every N days or weeks at a time
+        step("water plants every other day at 7am", days: 2, hour: 7),
+        step("water plants every 2 days at 9am", days: 2, hour: 9),
+        step("water plants every 3 days at 9am", days: 3, hour: 9),
+        step("call mom every 1 day at 6pm", hour: 18),
+        step("clean every other friday", weeks: 2, hour: 9, weekdays: [6]),
+        step("clean every other friday at 5pm", weeks: 2, hour: 17, weekdays: [6]),
+        step("team sync every 2 weeks on monday at 10am", weeks: 2, hour: 10, weekdays: [2]),
+        step("payroll biweekly on friday", weeks: 2, hour: 9, weekdays: [6]),
+        step("payroll fortnightly on friday at 4pm", weeks: 2, hour: 16, weekdays: [6]),
+        step("clean every second monday", weeks: 2, hour: 9, weekdays: [2]),
+
+        // Nth weekday of the month
+        monthWeek("team meeting first monday of the month", 1, 2),
+        monthWeek("team meeting on the first monday of every month at 10am", 1, 2, hour: 10),
+        monthWeek("pay bills last friday of the month", -1, 6),
+        monthWeek("book club every third thursday at 7pm", 3, 5, hour: 19),
+        monthWeek("review 2nd tuesday of the month", 2, 3),
+        Expect(text: "pay bills every month on the first monday", kind: .scheduledRoutine, hour: 9,
+               weekdays: [2], title: "pay bills") { p in
+            p.extras.monthWeek == 1 ? (p.title.lowercased() == "pay bills" ? nil : "title '\(p.title)'") : "monthWeek \(String(describing: p.extras.monthWeek))"
+        },
+
+        // End of the month
+        Expect(text: "pay rent on the last day of the month", kind: .scheduledRoutine, monthDay: 31),
+        Expect(text: "send invoice at the end of every month", kind: .scheduledRoutine, monthDay: 31),
+
+        // For a while, or until a date
+        ends("take pills at 9am for 7 days", hour: 9),
+        ends("take pills every 8 hours for 5 days", .repeatingRoutine, interval: 8 * 3600),
+        ends("stretch every morning for 2 weeks", hour: 8),
+        ends("take pills twice a day for a week", hour: 9),
+        ends("take pills at 9am until dec 1", hour: 9),
+        ends("take pills at 9am till 5 december", hour: 9),
+
+        // More one-time wording
+        Expect(text: "call mom tomorrow morning", kind: .scheduledRoutine, oneTime: true),
+        Expect(text: "call mom tomorrow evening", kind: .scheduledRoutine, oneTime: true),
+        at("call mom this evening", 19, oneTime: true),
+        at("call mom this friday at 5pm", 17, oneTime: true),
+        at("call mom tomorrow at night", 21, oneTime: true),
+        Expect(text: "call mom in an hour", kind: .scheduledRoutine, oneTime: true),
+        Expect(text: "call mom in 3 days", kind: .scheduledRoutine, oneTime: true),
+        Expect(text: "call mom in a week", kind: .scheduledRoutine, oneTime: true),
+        at("call mom day after tomorrow at 10am", 10, oneTime: true),
+        at("call mom tmrw at 3pm", 15, oneTime: true),
+        Expect(text: "remind me in 10 minutes to stretch", kind: .scheduledRoutine, oneTime: true, title: "stretch"),
+        Expect(text: "remind me to stretch in 10 minutes", kind: .scheduledRoutine, oneTime: true, title: "stretch"),
+
+        // Yearly and deadlines
+        Expect(text: "wish rahul happy birthday on march 12 every year", kind: .scheduledRoutine,
+               monthDay: 12, yearMonth: 3),
+        Expect(text: "anniversary annually on june 5", kind: .scheduledRoutine, monthDay: 5, yearMonth: 6),
+        rule("sharma wedding teaser due nov 20") { p in p.dueDate == nil ? "no deadline" : nil },
+
+        // Word order and typos
+        at("at 6pm call mom", 18, title: "call mom"),
+        at("6pm call mom", 18, title: "call mom"),
+        every("drink watr evry 40 mins", 40 * 60),
+
+        // Timers that must stay timers
+        Expect(text: "color grade for 30 min", kind: .goal, timer: true),
+        Expect(text: "export within 1 hour", kind: .goal, timer: true),
+
         // Plain tasks with no time are goals
         goal("call mom"),
         goal("buy milk"),
@@ -182,6 +341,7 @@ final class ReminderPhrasingTests: XCTestCase {
                 if let month = c.yearMonth, p.yearMonth != month { problems.append("yearMonth \(String(describing: p.yearMonth)) want \(month)") }
                 if c.oneTime, p.onceAt == nil { problems.append("no one-time date") }
             }
+            if let check = c.check, let problem = check(p) { problems.append(problem) }
             if let title = c.title, !p.title.lowercased().contains(title) {
                 problems.append("title '\(p.title)' lacks '\(title)'")
             }
