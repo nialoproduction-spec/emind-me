@@ -22,6 +22,17 @@ struct PanelTheme: Codable, Equatable {
         cornerRadius: 16
     )
 
+    /// Flat black and red: pure black, solid, red accent, white text.
+    static let flat = PanelTheme(
+        backgroundHex: "#000000",
+        backgroundOpacity: 1,
+        accentHex: "#E5322D",
+        textHex: "#FFFFFF",
+        fontName: "System",
+        fontSize: 13,
+        cornerRadius: 10
+    )
+
     var background: Color { Color(hex: backgroundHex) }
     var accent: Color { Color(hex: accentHex) }
     var text: Color { Color(hex: textHex) }

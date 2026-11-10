@@ -416,13 +416,13 @@ final class BreakCycleManagerTests: XCTestCase {
         XCTAssertEqual(work.text, .white)
 
         let rest = BreakIslandRules.palette(for: .onBreak, settings: defaults)
-        XCTAssertEqual(rest.background, .breakBlue, "soft blue on a break")
-        XCTAssertEqual(rest.text, .ink, "dark text on a light colour")
+        XCTAssertEqual(rest.background, .black, "flat black on a break too")
+        XCTAssertEqual(rest.text, .white)
 
         let away = BreakIslandRules.palette(for: .away, settings: defaults)
-        XCTAssertEqual(away.time, .awayRed, "time away in red")
-        XCTAssertEqual(away.background, .black)
-        XCTAssertEqual(away.leftWing, .awayRed, "the left side turns red")
+        XCTAssertEqual(away.background, .flatRed, "the whole notch turns flat red")
+        XCTAssertEqual(away.time, .white)
+        XCTAssertNil(away.leftWing, "no separate pulsing side")
         XCTAssertEqual(away.leftText, .white)
 
         var custom = defaults
@@ -435,9 +435,17 @@ final class BreakCycleManagerTests: XCTestCase {
         let settings = try JSONDecoder().decode(BreakTimerSettings.self, from: old)
         XCTAssertTrue(settings.keepWorkCountdown, "an old accidental hide goes back to always counting")
         XCTAssertTrue(settings.wordsStay)
-        XCTAssertEqual(settings.breakColor, .breakBlue)
+        XCTAssertEqual(settings.breakColor, .black, "old colours switch to the flat look once")
+        XCTAssertEqual(settings.awayColor, .flatRed)
         let roundTrip = try JSONDecoder().decode(BreakTimerSettings.self, from: JSONEncoder().encode(settings))
         XCTAssertEqual(roundTrip, settings)
+    }
+
+    func testOwnColoursStayAfterTheFlatSwitch() throws {
+        var mine = BreakTimerSettings()
+        mine.breakColor = .breakBlue
+        let back = try JSONDecoder().decode(BreakTimerSettings.self, from: JSONEncoder().encode(mine))
+        XCTAssertEqual(back.breakColor, .breakBlue, "a colour picked after the switch is kept")
     }
 
     func testTimeAwayString() {

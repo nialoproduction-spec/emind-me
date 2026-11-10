@@ -98,9 +98,9 @@ enum BreakIslandRules {
             let text = onTop(settings.breakColor)
             return IslandPalette(background: settings.breakColor, text: text, time: text, leftText: text)
         case .away:
-            let text = onTop(settings.workColor)
-            return IslandPalette(background: settings.workColor, text: text, time: settings.awayColor,
-                                 leftWing: settings.awayColor, leftText: onTop(settings.awayColor))
+            // Flat: the whole notch turns the away colour (red), no pulsing.
+            let text = onTop(settings.awayColor)
+            return IslandPalette(background: settings.awayColor, text: text, time: text, leftText: text)
         }
     }
 
@@ -298,22 +298,16 @@ struct EditHandle: ViewModifier {
     }
 }
 
-/// The island's body: solid colour (so the colour you pick is the colour
-/// you get), a faint sheen on top and a soft light along the bottom curve.
-/// On a break it slowly breathes, brightening and dimming over 8 seconds.
-/// Away after a break, the left side runs red and pulses.
+/// The island's body: one flat colour, nothing else. No sheen, no glow,
+/// no shadow, no breathing, no pulsing.
 struct IslandSurface: View {
     let palette: IslandPalette
-    /// The left side's width (the away alarm colours it).
+    /// Kept so callers don't change; the flat look doesn't use them.
     let leftWidth: CGFloat
     let middle: CGFloat
     var breathing = false
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var pulse = false
-    @State private var breathe = false
-
-    private var shape: UnevenRoundedRectangle {
+    var body: some View {
         UnevenRoundedRectangle(
             topLeadingRadius: 0,
             bottomLeadingRadius: IslandGeometry.cornerRadius,
@@ -321,41 +315,7 @@ struct IslandSurface: View {
             topTrailingRadius: 0,
             style: .continuous
         )
-    }
-
-    var body: some View {
-        ZStack(alignment: .leading) {
-            Rectangle().fill(palette.background.color)
-            if breathing {
-                Rectangle().fill(Color.white.opacity(breathe ? 0.16 : 0))
-            }
-            if let alarm = palette.leftWing {
-                Rectangle()
-                    .fill(alarm.color.opacity(pulse ? 1 : 0.62))
-                    .frame(width: leftWidth + middle / 2)
-                    .onAppear {
-                        guard !reduceMotion else { pulse = true; return }
-                        withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { pulse = true }
-                    }
-            }
-            LinearGradient(colors: [Color.white.opacity(0.07), Color.white.opacity(0)],
-                           startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.5))
-        }
-        .clipShape(shape)
-        .overlay(
-            shape.strokeBorder(
-                LinearGradient(stops: [.init(color: .clear, location: 0),
-                                       .init(color: .clear, location: 0.5),
-                                       .init(color: Color.white.opacity(0.22), location: 1)],
-                               startPoint: .top, endPoint: .bottom),
-                lineWidth: 1
-            )
-        )
-        .shadow(color: .black.opacity(0.3), radius: 5, y: 2)
-        .task(id: breathing) {
-            guard breathing, !reduceMotion else { breathe = false; return }
-            withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) { breathe = true }
-        }
+        .fill(palette.background.color)
     }
 }
 

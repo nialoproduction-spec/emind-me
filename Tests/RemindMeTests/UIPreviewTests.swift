@@ -397,7 +397,7 @@ final class UIPreviewTests: XCTestCase {
         let sheet = HStack(alignment: .top, spacing: 0) {
             panel(width: 340, height: 480) { EditItemView(item: walk, theme: theme, scrolls: false, onDone: {}) }
             panel(width: 340, height: 480) { EditItemView(item: water, theme: theme, scrolls: false, onDone: {}) }
-            panel(width: 340, height: 480) { SmartSettingsView().padding(14).environment(\.colorScheme, .dark) }
+            panel(width: 340, height: 480) { SettingsPage(page: .general).padding(14).environment(\.colorScheme, .dark) }
         }
         try save(sheet, as: "preview-11-edit-and-smart-settings.png")
     }
@@ -481,17 +481,27 @@ final class UIPreviewTests: XCTestCase {
         try save(view, as: "preview-notch-layout-editor.png")
     }
 
-    /// The whole Smart settings tab at the sheet's real width (340 with 20
-    /// padding), at full length, to catch anything running off the edges.
-    func testRenderSmartSettingsFull() throws {
+    /// The flat settings pages at their real width (640 window, 168 sidebar),
+    /// full length, to catch anything running off the edges. Switches and
+    /// pickers draw as yellow boxes here (an ImageRenderer limit).
+    func testRenderSettingsPages() throws {
         try XCTSkipIf(outputDir == nil, "PREVIEW_DIR not set")
-        let view = SmartSettingsView()
-            .frame(width: 300)
-            .padding(20)
-            .frame(width: 340)
-            .background(Color(white: 0.16))
-            .environment(\.colorScheme, .dark)
-        try save(view, as: "preview-12-smart-settings-full.png")
+        let pages: [SettingsView.Page] = [.general, .reminders, .checkIns, .notch, .shortcuts, .look, .health, .data]
+        let view = HStack(alignment: .top, spacing: 12) {
+            ForEach(pages) { page in
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(page.title).font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
+                    SettingsPage(page: page)
+                }
+                .frame(width: 440, alignment: .topLeading)
+                .padding(16)
+                .background(Flat.background)
+            }
+        }
+        .padding(12)
+        .background(Color(white: 0.2))
+        .environment(\.colorScheme, .dark)
+        try save(view, as: "preview-12-settings-pages.png")
     }
 
     /// The menu bar face awake (the original faces), looking at the pointer

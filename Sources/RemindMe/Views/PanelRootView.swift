@@ -109,7 +109,7 @@ struct PanelRootView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: themeStore.theme.cornerRadius, style: .continuous))
         .sheet(isPresented: $showingSettings) {
-            ThemeSettingsView(isPresented: $showingSettings)
+            SettingsView(isPresented: $showingSettings)
         }
         // Remember the overlay while it's up; forget it once it's gone and
         // the panel isn't mid-fade (e.g. it went back to the open list).

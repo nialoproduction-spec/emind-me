@@ -152,17 +152,19 @@ struct RGBColor: Codable, Equatable, Hashable {
     /// The soft blue for breaks (#C5D2E5).
     static let breakBlue = RGBColor(r: 0.773, g: 0.824, b: 0.898)
     static let awayRed = RGBColor(r: 1.0, g: 0.27, b: 0.23)
+    /// The flat red (#E5322D): time away, a timer that's up, the app's accent.
+    static let flatRed = RGBColor(r: 0.898, g: 0.196, b: 0.176)
 
-    /// Quick picks in Settings.
+    /// Quick picks in Settings: flat colours only.
     static let swatches: [RGBColor] = [
         .black,
         RGBColor(r: 0.17, g: 0.17, b: 0.19), // graphite
+        RGBColor(r: 0.35, g: 0.35, b: 0.37), // grey
+        .white,
+        .flatRed,
+        RGBColor(r: 0.55, g: 0.08, b: 0.08), // dark red
         .breakBlue,
-        RGBColor(r: 0.72, g: 0.89, b: 0.80), // mint
-        RGBColor(r: 0.98, g: 0.81, b: 0.69), // peach
-        RGBColor(r: 0.83, g: 0.78, b: 0.96), // lavender
         RGBColor(r: 0.11, g: 0.19, b: 0.38), // navy
-        .awayRed,
     ]
 }
 
@@ -177,9 +179,11 @@ struct BreakTimerSettings: Codable, Equatable {
     /// The notch's colour while working.
     var workColor = RGBColor.black
     /// The notch's colour on a break.
-    var breakColor = RGBColor.breakBlue
-    /// The colour of the time-away count after a break.
-    var awayColor = RGBColor.awayRed
+    var breakColor = RGBColor.black
+    /// The notch's colour when you're away after a break, or a timer is up.
+    var awayColor = RGBColor.flatRed
+    /// Saved after the switch to the flat black and red look.
+    var flatLook = true
     /// Where the face, z's, word and time sit, and how big the notch is.
     var layout = IslandLayout()
 
@@ -192,7 +196,7 @@ struct BreakTimerSettings: Codable, Equatable {
     init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case workCountdownStays, wordsStay, workColor, breakColor, awayColor, layout
+        case workCountdownStays, wordsStay, workColor, breakColor, awayColor, layout, flatLook
     }
 
     /// Settings saved before colours or the layout existed still load (and
@@ -203,9 +207,14 @@ struct BreakTimerSettings: Codable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         workCountdownStays = try c.decodeIfPresent(Bool.self, forKey: .workCountdownStays) ?? true
         wordsStay = try c.decodeIfPresent(Bool.self, forKey: .wordsStay) ?? true
-        workColor = try c.decodeIfPresent(RGBColor.self, forKey: .workColor) ?? .black
-        breakColor = try c.decodeIfPresent(RGBColor.self, forKey: .breakColor) ?? .breakBlue
-        awayColor = try c.decodeIfPresent(RGBColor.self, forKey: .awayColor) ?? .awayRed
+        // Colours saved before the flat look are switched to it once
+        // (black, black, flat red); after that, your own picks stay.
+        if try c.decodeIfPresent(Bool.self, forKey: .flatLook) == true {
+            workColor = try c.decodeIfPresent(RGBColor.self, forKey: .workColor) ?? .black
+            breakColor = try c.decodeIfPresent(RGBColor.self, forKey: .breakColor) ?? .black
+            awayColor = try c.decodeIfPresent(RGBColor.self, forKey: .awayColor) ?? .flatRed
+        }
+        flatLook = true
         layout = (try? c.decodeIfPresent(IslandLayout.self, forKey: .layout)) ?? IslandLayout()
     }
 }
