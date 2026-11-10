@@ -19,7 +19,7 @@ final class ScheduleExtrasTests: XCTestCase {
         return item
     }
 
-    private func clock(_ hour: Int, _ minute: Int = 0, days: [Int]? = nil, _ rules: ScheduleExtras) -> Item {
+    private func clock(_ hour: Int, minute: Int = 0, days: [Int]? = nil, _ rules: ScheduleExtras) -> Item {
         let item = Item(title: "Pills", kind: .scheduledRoutine, hour: hour, minute: minute, weekdaysRaw: days)
         item.extras = rules
         return item
