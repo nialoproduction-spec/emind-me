@@ -9,6 +9,9 @@ import SwiftData
 /// service; tests pass no-ops (notifications need an app bundle).
 @MainActor
 enum ItemActions {
+    /// Shortest gap a repeating reminder can have ("every 30 sec" is fine).
+    nonisolated static let minimumInterval: TimeInterval = 10
+
 
     // MARK: - Pause
 
@@ -76,8 +79,9 @@ enum ItemActions {
         guard item.kind != .goal else { return }
         item.isActive = true
         item.pausedUntil = nil
-        // Recompute from now rather than resuming against a stale time.
-        item.nextFireDate = item.computeNextFireDate(after: now)
+        // Recompute from now rather than resuming against a stale time. A
+        // one-time reminder whose moment has passed is over, not moved.
+        item.arm(after: now)
         (reschedule ?? { NotificationService.shared.schedule(for: $0) })(item)
     }
 
@@ -93,6 +97,8 @@ enum ItemActions {
         var minute: Int?
         var weekdays: [Int]
         var targetDate: Date?
+        /// Timed reminders: false = one-time, goes off once and never again.
+        var repeats: Bool
 
         init(of item: Item) {
             title = item.title
@@ -103,13 +109,14 @@ enum ItemActions {
             minute = item.minute
             weekdays = item.weekdaysRaw ?? []
             targetDate = item.targetDate
+            repeats = item.onceAt == nil
         }
 
         /// Whether it can be saved: a title, and a usable schedule.
         var isValid: Bool {
             guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
             switch kind {
-            case .repeatingRoutine: return (intervalSeconds ?? 0) >= 60
+            case .repeatingRoutine: return (intervalSeconds ?? 0) >= ItemActions.minimumInterval
             case .scheduledRoutine: return hour != nil && minute != nil
             case .goal: return true
             }
@@ -129,7 +136,10 @@ enum ItemActions {
             || edit.intervalSeconds != item.intervalSeconds
             || edit.hour != item.hour || edit.minute != item.minute
             || edit.weekdays.sorted() != (item.weekdaysRaw ?? []).sorted()
+            || (edit.kind == .scheduledRoutine && edit.repeats != (item.onceAt == nil))
 
+        // The editor only knows plain schedules: a new kind drops the extra rules.
+        let kindChanged = edit.kind != item.kind
         item.title = edit.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let category = edit.category?.trimmingCharacters(in: .whitespacesAndNewlines)
         item.category = (category?.isEmpty ?? true) ? nil : category
@@ -142,6 +152,7 @@ enum ItemActions {
             item.minute = nil
             item.weekdaysRaw = nil
             item.targetDate = nil
+            clearDates(of: item)
         case .scheduledRoutine:
             item.intervalSeconds = nil
             item.hour = edit.hour
@@ -149,6 +160,30 @@ enum ItemActions {
             let days = Array(Set(edit.weekdays)).sorted()
             item.weekdaysRaw = (days.isEmpty || days.count == 7) ? nil : days
             item.targetDate = nil
+            if item.monthDay == nil, item.dueDate == nil {
+                if edit.repeats {
+                    // Back to repeating: a finished one-time comes back to life.
+                    if item.onceAt != nil {
+                        item.onceAt = nil
+                        item.endedAt = nil
+                        if item.pausedUntil == nil { item.isActive = true }
+                    }
+                } else if scheduleChanged || item.onceAt == nil, let hour = edit.hour, let minute = edit.minute {
+                    // One-time: on its day at the new time if that's still ahead,
+                    // else the next time the clock shows it.
+                    var target = item.onceAt.flatMap {
+                        Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: $0)
+                    }
+                    if target.map({ $0 <= now }) ?? true {
+                        target = Item.nextClockTime(hour: hour, minute: minute, after: now)
+                    }
+                    item.onceAt = target
+                    item.endedAt = nil
+                    item.extrasData = nil
+                    if item.pausedUntil == nil { item.isActive = true }
+                }
+            }
+            if item.repeatKind != .daily, item.repeatKind != .weekly { item.weekdaysRaw = nil }
         case .goal:
             item.intervalSeconds = nil
             item.hour = nil
@@ -156,14 +191,34 @@ enum ItemActions {
             item.weekdaysRaw = nil
             item.targetDate = edit.targetDate
             item.nextFireDate = nil
+            clearDates(of: item)
         }
 
+        if kindChanged { item.extrasData = nil }
         if scheduleChanged { item.scheduleEditedAt = now }
         if edit.kind != .goal, scheduleChanged || item.nextFireDate == nil, item.isActive {
             item.nextFireDate = item.computeNextFireDate(after: now)
         }
         // Title changes show in the notification text too, so always refresh.
         (reschedule ?? { NotificationService.shared.schedule(for: $0) })(item)
+    }
+
+    /// Back to a plain schedule (or a goal): no one-time / monthly / yearly
+    /// date or deadline any more.
+    private static func clearDates(of item: Item) {
+        item.onceAt = nil
+        item.monthDay = nil
+        item.yearMonth = nil
+        item.dueDate = nil
+        item.endedAt = nil
+    }
+
+    /// A deadline delivered, or a one-time reminder put away: it's over and
+    /// leaves the lists.
+    static func finish(_ item: Item, now: Date = .now, cancelNotifications: ((Item) -> Void)? = nil) {
+        item.endedAt = now
+        item.nextFireDate = nil
+        (cancelNotifications ?? { NotificationService.shared.cancel(for: $0) })(item)
     }
 
     // MARK: - Suggestions
@@ -189,6 +244,28 @@ enum ItemActions {
 /// Ticking things off (or un-ticking them) in today's checklist.
 @MainActor
 enum OccurrenceActions {
+    /// An entry's answer as it was, to put back on undo.
+    struct Snapshot {
+        let status: OccurrenceStatus
+        let resolvedAt: Date?
+        let nextEscalationAt: Date?
+        let remindersSentCount: Int
+
+        init(_ occurrence: Occurrence) {
+            status = occurrence.status
+            resolvedAt = occurrence.resolvedAt
+            nextEscalationAt = occurrence.nextEscalationAt
+            remindersSentCount = occurrence.remindersSentCount
+        }
+
+        func restore(_ occurrence: Occurrence) {
+            occurrence.status = status
+            occurrence.resolvedAt = resolvedAt
+            occurrence.nextEscalationAt = nextEscalationAt
+            occurrence.remindersSentCount = remindersSentCount
+        }
+    }
+
     /// Sets a checklist entry's status. If it's the reminder on screen, it's
     /// answered through the scheduler, so the card closes as if a button had
     /// been pressed. "Not done" is recorded as missed (`.unfinished`), which
@@ -205,9 +282,16 @@ enum OccurrenceActions {
             scheduler.resolveActive(as: target)
             return
         }
+        let before = Snapshot(occurrence)
         occurrence.status = target
         occurrence.nextEscalationAt = nil
         occurrence.resolvedAt = target == .unfinished ? nil : now
+        guard target == .done || target == .skipped, before.status != target else { return }
+        let title = occurrence.item?.title ?? "Reminder"
+        scheduler.undo.record((target == .done ? "Done: " : "Skipped: ") + title) {
+            guard !occurrence.isDeleted else { return }
+            before.restore(occurrence)
+        }
     }
 
     /// Tapping a checklist row: done ↔ not done.

@@ -16,22 +16,61 @@ struct ParsedItem {
     /// Set for "rest every 40 min and take a 10 min break": saving starts the
     /// menu bar break timer instead of adding a routine.
     var breakCycle: BreakCycleConfig? = nil
+    /// What the person picked in the confirmation bar; nil = the default.
+    var chosen: ItemType? = nil
+    /// One-time: "tomorrow 3pm", "Nov 5 at 10am", "in 2 hours".
+    var onceAt: Date? = nil
+    /// Monthly on this day ("pay rent on the 1st"), or yearly with `yearMonth`.
+    var monthDay: Int? = nil
+    var yearMonth: Int? = nil
+    /// Deadline ("Sharma teaser due Nov 10"): nudges 7, 3, 1 day before.
+    var dueDate: Date? = nil
+    /// "choosing music within 30 min": a timer that counts down in the list.
+    var timer: TimerRequest? = nil
+    /// Every timer in the line, in order ("edit 2 min, write 3 song"). `timer` is the first.
+    var timers: [TimerRequest] = []
+    /// Active hours, several times a day, every N days/weeks, Nth weekday, end date.
+    var extras = ScheduleExtras()
+
+    /// Has a time or interval, so it can be a reminder or a habit.
+    var hasSchedule: Bool { kind != .goal }
+
+    /// Reminder, habit or goal. Text with a time or interval starts out as a
+    /// reminder (the quiet one); text without starts out as a goal.
+    var type: ItemType {
+        if let chosen, chosen == .goal || hasSchedule { return chosen }
+        if timer != nil { return .reminder }
+        return hasSchedule ? .reminder : .goal
+    }
 
     /// Schedule description for the confirmation banner (title shown separately).
     var detailLine: String {
-        if let breakCycle {
-            return "\(breakCycle.breakMinutes) min break · repeats until you stop it"
+        if let timer {
+            return "Timer · \(Int((timer.seconds / 60).rounded())) min"
         }
+        if let breakCycle {
+            return "\(BreakCycleConfig.short(breakCycle.breakSeconds)) break · repeats until you turn it off"
+        }
+        if type == .goal, kind != .goal { return "8 PM check-in" }
         switch kind {
         case .repeatingRoutine:
             guard let intervalSeconds else { return "" }
-            return "every \(Item.durationString(intervalSeconds))"
+            return ScheduleExtras.intervalLine(interval: intervalSeconds, weekdays: Array(weekdays), extras: extras)
         case .scheduledRoutine:
+            if dueDate != nil {
+                let line = Item.specialSummary(repeat: .deadline, onceAt: nil, monthDay: nil, yearMonth: nil,
+                                               dueDate: dueDate, hour: hour, minute: minute) ?? ""
+                return line + " · nudges 7, 3, 1 day before"
+            }
+            let special: Item.Repeat? = onceAt != nil ? .once
+                : monthDay != nil ? (yearMonth != nil ? .yearly : .monthly) : nil
+            if let special, let line = Item.specialSummary(repeat: special, onceAt: onceAt, monthDay: monthDay,
+                                                           yearMonth: yearMonth, dueDate: nil,
+                                                           hour: hour, minute: minute) {
+                return line
+            }
             guard let hour, let minute else { return "" }
-            let time = Item.clockTimeString(hour: hour, minute: minute)
-            if weekdays.isEmpty || weekdays.count == 7 { return "\(time) · Daily" }
-            let symbols = ["", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-            return "\(time) · " + weekdays.sorted().map { symbols[$0] }.joined(separator: ", ")
+            return ScheduleExtras.clockLine(hour: hour, minute: minute, weekdays: Array(weekdays), extras: extras)
         case .goal:
             guard let targetDate else { return "No date" }
             let formatter = DateFormatter()
@@ -42,10 +81,7 @@ struct ParsedItem {
 
     var kindLabel: String {
         if breakCycle != nil { return "Break timer" }
-        switch kind {
-        case .repeatingRoutine, .scheduledRoutine: return "Routine"
-        case .goal: return "Goal"
-        }
+        return type.label
     }
 }
 
@@ -53,25 +89,52 @@ struct ParsedItem {
 /// model download, just regexes and small word lists. That matches the
 /// app's "no cloud, no account" brief, and keeps this instant.
 enum ItemParser {
-    static func parse(_ raw: String) -> ParsedItem {
+    static func parse(_ raw: String, now: Date = Date(), calendar: Calendar = .current) -> ParsedItem {
+        // Typos in "every" ("evry", "rvry 4 min") are fixed and "remind me
+        // to" is dropped first, so they never reach the title or the rules.
+        let fixed = normalizePhrases(fixEveryTypos(raw))
+        let cleaned = dropLeadIn(fixed)
+        // "remind me to …" with a date but no time is a reminder (9 AM), not a goal.
+        let askedToRemind = cleaned != fixed
         // Hashtags first: "#work" anywhere sets the category and is taken out
         // of the text before anything else reads it.
-        let (withoutTags, category) = extractCategory(from: raw)
+        let (withoutTags, category) = extractCategory(from: cleaned)
+        // "work 25 min and rest 5 min", "work every 1 minute break every 10
+        // minute", "40 min work 10 min rest": both lengths named outright.
+        if let (work, rest) = workAndRest(in: withoutTags) {
+            let config = BreakCycleConfig(workSeconds: Int(work.rounded()), breakSeconds: Int(rest.rounded()))
+            var cycle = ParsedItem(kind: .repeatingRoutine, title: config.title, intervalSeconds: work,
+                                   hour: nil, minute: nil, weekdays: [], targetDate: nil)
+            cycle.category = category
+            cycle.breakCycle = config
+            return cycle
+        }
         // A break phrase ("and take a 10 min break") is cut out first, so its
         // number can't be mistaken for part of the "every 40 min" interval.
         if let rest = breakPhrase(in: withoutTags) {
             let schedule = (withoutTags as NSString).replacingCharacters(in: rest.range, with: " ")
-            var cycle = parseSchedule(schedule)
+            var cycle = parseSchedule(schedule, now: now, calendar: calendar, askedToRemind: askedToRemind)
             if cycle.kind == .repeatingRoutine, let interval = cycle.intervalSeconds {
-                let work = max(1, Int((interval / 60).rounded()))
-                let breakMinutes = max(1, Int((rest.seconds / 60).rounded()))
+                let config = BreakCycleConfig(workSeconds: Int(interval.rounded()), breakSeconds: Int(rest.seconds.rounded()))
                 cycle.category = category
-                cycle.breakCycle = BreakCycleConfig(workMinutes: work, breakMinutes: breakMinutes)
-                cycle.title = "Rest every \(work) min"
+                cycle.breakCycle = config
+                cycle.title = "Rest every \(BreakCycleConfig.short(config.workSeconds))"
                 return cycle
             }
         }
-        var parsed = parseSchedule(withoutTags)
+        // "choosing music within 30 min": a timer, not a reminder or a goal.
+        if !askedToRemind {
+            let requests = TimerRequest.parseAll(withoutTags)
+            if let request = requests.first ?? TimerRequest.parse(withoutTags) {
+                var timer = ParsedItem(kind: .goal, title: request.title, intervalSeconds: nil, hour: nil,
+                                       minute: nil, weekdays: [], targetDate: nil)
+                timer.category = category ?? request.category
+                timer.timer = request
+                timer.timers = requests.isEmpty ? [request] : requests
+                return timer
+            }
+        }
+        var parsed = parseSchedule(withoutTags, now: now, calendar: calendar, askedToRemind: askedToRemind)
         parsed.category = category
         return parsed
     }
@@ -90,6 +153,115 @@ enum ItemParser {
         return nil
     }
 
+    // MARK: - Clean-up before parsing
+
+    /// "remind me to drink water…" → "drink water…". Also "please remind
+    /// me to", "remind me about", "reminder:", "don't forget to".
+    static func dropLeadIn(_ text: String) -> String {
+        let ns = text as NSString
+        guard let match = leadInRegex.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)) else { return text }
+        let rest = ns.substring(from: match.range.location + match.range.length)
+        return rest.trimmingCharacters(in: .whitespaces).isEmpty ? text : rest
+    }
+
+    private static let leadInRegex = try! NSRegularExpression(
+        pattern: #"^\s*(?:please\s+)?(?:(?:remind|rmind|remid|remnd)\s+me\s+(?:to\s+|about\s+|that\s+)?|reminder\s*(?::|to\b)?\s*|(?:don'?t|dont|do\s+not)\s+forget\s+(?:to\s+)?)"#,
+        options: [.caseInsensitive]
+    )
+
+    /// A word that's close to "every" ("evry", "rvry", "rvrry", "evrey") and
+    /// is followed by a number or a unit becomes "every". Real words that
+    /// look alike ("over", "even") are left alone.
+    static func fixEveryTypos(_ text: String) -> String {
+        let ns = text as NSString
+        let matches = everyTypoRegex.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else { return text }
+        let result = NSMutableString(string: text)
+        for match in matches.reversed() {
+            let word = ns.substring(with: match.range).lowercased()
+            guard word != "every", !["over", "even", "eve"].contains(word),
+                  word == "each" || editDistance(word, "every") <= 2 else { continue }
+            result.replaceCharacters(in: match.range, with: "every")
+        }
+        return result as String
+    }
+
+    private static let everyTypoRegex = try! NSRegularExpression(
+        pattern: #"\b[a-z]{3,7}\b(?=\s*(?:\d|(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty|forty|fifty|sixty|half)\b|(?:sec|min|hour|hr|day|week)[a-z]*\b))"#,
+        options: [.caseInsensitive]
+    )
+
+    /// Levenshtein distance; words here are a few letters, so the simple
+    /// table is plenty.
+    static func editDistance(_ a: String, _ b: String) -> Int {
+        let a = Array(a), b = Array(b)
+        if a.isEmpty { return b.count }
+        if b.isEmpty { return a.count }
+        var previous = Array(0...b.count)
+        for i in 1...a.count {
+            var current = [i] + Array(repeating: 0, count: b.count)
+            for j in 1...b.count {
+                current[j] = a[i - 1] == b[j - 1]
+                    ? previous[j - 1]
+                    : 1 + min(previous[j - 1], previous[j], current[j - 1])
+            }
+            previous = current
+        }
+        return previous[b.count]
+    }
+
+    /// Work and rest lengths (seconds) when the text names both with the
+    /// words "work" and "rest"/"break". The work part is cut out before the
+    /// rest part is looked for, so one number is never read twice.
+    static func workAndRest(in text: String) -> (work: Double, rest: Double)? {
+        let ns = text as NSString
+        let full = NSRange(location: 0, length: ns.length)
+        // "40 min work 10 min rest" must read 40 as the work, so the
+        // number-first form is tried first.
+        for regex in [workAfterRegex, workBeforeRegex] {
+            guard let match = regex.firstMatch(in: text, range: full),
+                  let work = seconds(in: ns, match) else { continue }
+            let remainder = ns.replacingCharacters(in: match.range, with: " ")
+            let rns = remainder as NSString
+            let rfull = NSRange(location: 0, length: rns.length)
+            for restRegex in [restBeforeRegex, breakAfterRegex] {
+                if let restMatch = restRegex.firstMatch(in: remainder, range: rfull),
+                   let rest = seconds(in: rns, restMatch) {
+                    return (work, rest)
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func seconds(in ns: NSString, _ match: NSTextCheckingResult) -> Double? {
+        guard let quantity = parseQuantity(ns.substring(with: match.range(withName: "qty"))), quantity > 0 else { return nil }
+        return quantity * unitSeconds(ns.substring(with: match.range(withName: "unit")).lowercased())
+    }
+
+    /// Units, long forms first so "min" never stops short of "minutes";
+    /// h / m / s only as whole words ("40m", "2 h", "30s").
+    private static let durationUnit = #"(?:hou?r[a-z]*|hr[a-z]*|h|min[a-z]*|m|sec[a-z]*|s)\b"#
+
+    /// "work 40 min", "work for 25 minutes", "work every 1 minute", "focus 2h".
+    private static let workBeforeRegex = try! NSRegularExpression(
+        pattern: #"\b(?:work|working|focus|study)\s+(?:for\s+|every\s+)?(?<qty>"# + breakQuantity + #")\s*-?\s*(?<unit>"# + durationUnit + #")"#,
+        options: [.caseInsensitive]
+    )
+
+    /// "40 min work", "25-minute focus", "1 hr of work".
+    private static let workAfterRegex = try! NSRegularExpression(
+        // Not when the number belongs to a rest ("rest 5 min work 25 min").
+        pattern: #"(?<!rest\s)(?<!break\s)(?<!relax\s)\b(?<qty>"# + breakQuantity + #")\s*-?\s*(?<unit>"# + durationUnit + #")\s+(?:of\s+)?(?:work|focus|study)\b"#,
+        options: [.caseInsensitive]
+    )
+
+    /// "rest 1 minute", "break every 10 minute", "rest for 5 min", "relax 30 sec".
+    private static let restBeforeRegex = try! NSRegularExpression(
+        pattern: #"\b(?:rest|break|relax|pause)\s+(?:for\s+|every\s+|of\s+|is\s+)?(?<qty>"# + breakQuantity + #")\s*-?\s*(?<unit>"# + durationUnit + #")"#,
+        options: [.caseInsensitive]
+    )
+
     /// A number as digits or words ("10", "ten", "forty five") — and nothing
     /// else, so surrounding words can't leak into the amount.
     private static let breakQuantity: String = {
@@ -99,13 +271,13 @@ enum ItemParser {
 
     /// "10 min break", "ten-minute break".
     private static let breakAfterRegex = try! NSRegularExpression(
-        pattern: #"\b(?<qty>"# + breakQuantity + #")\s*-?\s*(?<unit>minutes?|mins?|hours?|hrs?)\s+break\b"#,
+        pattern: #"\b(?<qty>"# + breakQuantity + #")\s*-?\s*(?<unit>"# + durationUnit + #")\s+(?:of\s+)?(?:break|rest)\b"#,
         options: [.caseInsensitive]
     )
 
     /// "break of 10 minutes", "break for ten min".
     private static let breakBeforeRegex = try! NSRegularExpression(
-        pattern: #"\bbreak\s+(?:of|for|is|lasting)?\s*(?<qty>"# + breakQuantity + #")\s*(?<unit>minutes?|mins?|hours?|hrs?)\b"#,
+        pattern: #"\bbreak\s+(?:of|for|is|lasting)?\s*(?<qty>"# + breakQuantity + #")\s*(?<unit>"# + durationUnit + #")"#,
         options: [.caseInsensitive]
     )
 
@@ -125,12 +297,18 @@ enum ItemParser {
 
     private static let hashtagRegex = try! NSRegularExpression(pattern: #"#(\p{L}[\p{L}\p{N}_-]*)"#)
 
-    private static func parseSchedule(_ raw: String) -> ParsedItem {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
+    private static func parseSchedule(_ raw: String, now: Date, calendar: Calendar,
+                                      askedToRemind: Bool) -> ParsedItem {
+        let original = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !original.isEmpty else {
             return ParsedItem(kind: .goal, title: "Untitled", intervalSeconds: nil,
                               hour: nil, minute: nil, weekdays: [], targetDate: nil)
         }
+        // 0. Rules beyond one time a day are read first and blanked out (same
+        // length, so ranges stay valid), so later steps never misread them.
+        let rules = scheduleRules(in: original, now: now, calendar: calendar)
+        let trimmed = rules.text
+        var extras = rules.extras
 
         let ns = trimmed as NSString
         let fullRange = NSRange(location: 0, length: ns.length)
@@ -141,11 +319,16 @@ enum ItemParser {
         // an interval — that's a daily/weekly *schedule* signal, handled below.
         var intervalSeconds: Double?
         if let match = intervalRegex.firstMatch(in: trimmed, range: fullRange) {
-            let unitRange = match.range(withName: "unit")
-            let qtyRange = match.range(withName: "qty")
-            let unit = ns.substring(with: unitRange).lowercased()
-            let qtyPhrase = qtyRange.location != NSNotFound ? ns.substring(with: qtyRange) : nil
-            let isDayOrWeek = unit.hasPrefix("day") || unit.hasPrefix("week")
+            func group(_ names: [String]) -> String? {
+                for name in names {
+                    let range = match.range(withName: name)
+                    if range.location != NSNotFound { return ns.substring(with: range) }
+                }
+                return nil
+            }
+            let unit = (group(["unit", "unit2", "unit3"]) ?? "").lowercased()
+            let qtyPhrase = group(["qty", "qty2"])
+            let isDayOrWeek = unit.hasPrefix("d") || unit.hasPrefix("w")
             if !(isDayOrWeek && qtyPhrase == nil) {
                 let quantity = qtyPhrase.flatMap(parseQuantity) ?? 1
                 if quantity > 0 {
@@ -155,11 +338,34 @@ enum ItemParser {
             }
         }
 
+        // "every other day at 7am", "every 2 weeks on friday": a clock-time
+        // schedule that skips days or weeks, not a plain interval.
+        if let interval = intervalSeconds {
+            let weeks = interval / 604_800
+            let days = interval / 86_400
+            let hasClock = clockAtRegex.firstMatch(in: trimmed, range: fullRange) != nil
+                || bareClockTime(in: trimmed) != nil || rules.partHour != nil || rules.timesPerDay != nil
+            let hasWeekday = weekdayMatchers.contains {
+                !$0.weekdays.isEmpty && $0.regex.firstMatch(in: trimmed, range: fullRange) != nil
+            }
+            if weeks >= 1, weeks == weeks.rounded(), hasClock || hasWeekday {
+                if weeks > 1 { extras.weekStep = Int(weeks) }
+                intervalSeconds = nil
+            } else if days >= 1, days == days.rounded(), hasClock {
+                if days > 1 { extras.dayStep = Int(days) }
+                intervalSeconds = nil
+            }
+            if intervalSeconds == nil, !hasWeekday, weeks >= 1, weeks == weeks.rounded() {
+                extras.anchor = now // "every 2 weeks at 5pm": on today's weekday
+            }
+        }
+
         // 2. Clock time ("at 4am", "at seven a.m.", "noon") — only looked for
         // when there's no interval, since an interval already makes this a
         // repeating routine.
         var hour: Int?
         var minute: Int?
+        var bareHourAt = false // "at 9" with no am/pm
         if intervalSeconds == nil {
             if let match = clockAtRegex.firstMatch(in: trimmed, range: fullRange) {
                 let hourPhrase = ns.substring(with: match.range(withName: "hour")).lowercased()
@@ -191,8 +397,14 @@ enum ItemParser {
                 if isValidTime, (0...59).contains(parsedMinute) {
                     hour = parsedHour
                     minute = parsedMinute
+                    bareHourAt = !(isPM || isAM)
                     stripRanges.append(match.range)
                 }
+            } else if let time = bareClockTime(in: trimmed) {
+                // No "at": "every 6pm", "6:30 pm", "9.15am", "21:00".
+                hour = time.hour
+                minute = time.minute
+                stripRanges.append(time.range)
             } else if let match = clockWordRegex.firstMatch(in: trimmed, range: fullRange) {
                 let word = ns.substring(with: match.range).lowercased()
                 hour = word == "noon" ? 12 : 0
@@ -201,13 +413,83 @@ enum ItemParser {
             }
         }
 
-        // 3. Weekday / daily repeat signal.
+        // "tonight at 9" means 9 PM.
+        if bareHourAt, let h = hour, (1...11).contains(h),
+           tonightRegex.firstMatch(in: trimmed, range: fullRange) != nil {
+            hour = h + 12
+        }
+
+        // Several times: "at 9am and 9pm", "at 8am, 1pm and 8pm".
+        if intervalSeconds == nil, hour != nil {
+            let chain = timeChain(in: trimmed)
+            if chain.count >= 2, let first = chain.first, let last = chain.last {
+                let all = chain.map { $0.minutes }
+                let earliest = all.min() ?? 0
+                hour = earliest / 60
+                minute = earliest % 60
+                extras.extraTimes = Array(Set(all.filter { $0 != earliest })).sorted()
+                stripRanges.append(NSRange(location: first.range.location,
+                                           length: last.range.location + last.range.length - first.range.location))
+            }
+        }
+        if intervalSeconds == nil, hour == nil {
+            if let count = rules.timesPerDay {
+                // "twice a day": spread over the waking day.
+                let defaults = [1: [540], 2: [540, 1260], 3: [480, 840, 1200], 4: [480, 720, 960, 1200]]
+                let times = defaults[count] ?? [540]
+                hour = times[0] / 60
+                minute = times[0] % 60
+                if times.count > 1 { extras.extraTimes = Array(times.dropFirst()) }
+            } else if let part = rules.partHour {
+                hour = part
+                minute = 0
+            } else if extras.monthWeek != nil || extras.weekStep != nil || extras.dayStep != nil
+                        || !rules.weekdays.isEmpty {
+                hour = 9
+                minute = 0
+            }
+        }
+
+        // 3. Dates: one-time ("tomorrow", "Nov 5", "in 2 hours"), monthly
+        // ("on the 1st"), yearly ("every Mar 12"), deadlines ("due Nov 10").
+        if intervalSeconds == nil,
+           var dated = datedSchedule(in: trimmed, hour: hour, minute: minute, now: now, calendar: calendar,
+                                     askedToRemind: askedToRemind) {
+            stripRanges += dated.ranges
+            dated.item.title = buildTitle(from: trimmed, stripping: stripRanges)
+            dated.item.extras.endsOn = extras.endsOn
+            return dated.item
+        }
+
+        // 4. Weekday / repeat signals. A timed reminder repeats ONLY when the
+        // text says so: "every…", "daily", "weekdays", "mondays", "weekly",
+        // several named days, or a rule like "twice a day" or "every other
+        // friday". A lone "at 10 am" or "on monday at 6pm" goes off once.
         var weekdays = Set<Int>()
+        var repeats = rules.repeats || extras.needsDayScan || extras.anchor != nil
         for matcher in weekdayMatchers {
             for match in matcher.regex.matches(in: trimmed, range: fullRange) {
                 weekdays.formUnion(matcher.weekdays)
                 stripRanges.append(match.range)
+                let word = ns.substring(with: match.range).lowercased()
+                // "daily", "weekdays", "weekends", "mondays" always repeat.
+                if matcher.weekdays.count != 1 || word.hasSuffix("days") { repeats = true }
             }
+        }
+        weekdays.formUnion(rules.weekdays)
+        if weekdays.count > 1 { repeats = true }
+        if everyWordRegex.firstMatch(in: trimmed, range: fullRange) != nil { repeats = true }
+        if let match = weeklyRegex.firstMatch(in: trimmed, range: fullRange) {
+            // "weekly", "every week": on today's weekday.
+            repeats = true
+            stripRanges.append(match.range)
+            if weekdays.isEmpty { weekdays.insert(calendar.component(.weekday, from: now)) }
+        }
+        // "every 2 weeks at 5pm" with no day named: on today's weekday.
+        if extras.weekStep != nil, weekdays.isEmpty { weekdays.insert(calendar.component(.weekday, from: now)) }
+        if extras.anchor != nil, extras.weekStep == nil, extras.dayStep == nil, weekdays.isEmpty {
+            weekdays.insert(calendar.component(.weekday, from: now)) // "every 1 week at 9am"
+            extras.anchor = nil
         }
 
         // Classify.
@@ -231,13 +513,603 @@ enum ItemParser {
             }
         }
 
+        // A timed reminder that isn't asked to repeat goes off once: on the
+        // one named day, else the next time the clock shows that time.
+        var onceAt: Date?
+        if kind == .scheduledRoutine, !repeats, let hour, let minute {
+            onceAt = oneTimeDate(hour: hour, minute: minute, weekday: weekdays.count == 1 ? weekdays.first : nil,
+                                 now: now, calendar: calendar)
+            weekdays = []
+        }
+
         let title = buildTitle(from: trimmed, stripping: stripRanges)
 
-        return ParsedItem(
+        var result = ParsedItem(
             kind: kind, title: title, intervalSeconds: intervalSeconds,
             hour: hour, minute: minute, weekdays: weekdays, targetDate: targetDate
         )
+        result.onceAt = onceAt
+        // Active hours only mean something for an interval; the rest only for a clock time.
+        if kind == .repeatingRoutine {
+            extras.extraTimes = nil
+            extras.dayStep = nil
+            extras.weekStep = nil
+            extras.monthWeek = nil
+            extras.anchor = nil
+        } else {
+            extras.windowStart = nil
+            extras.windowEnd = nil
+        }
+        if kind != .goal { result.extras = extras }
+        return result
     }
+
+    // MARK: - Dates
+
+    /// When a one-time reminder at `hour:minute` goes off: on the named
+    /// weekday if there is one, otherwise the next time the clock shows that
+    /// time. Always in the future.
+    static func oneTimeDate(hour: Int, minute: Int, weekday: Int?, now: Date,
+                            calendar: Calendar = .current) -> Date? {
+        if let weekday {
+            for offset in 0..<8 {
+                guard let day = calendar.date(byAdding: .day, value: offset, to: now),
+                      calendar.component(.weekday, from: day) == weekday,
+                      let candidate = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day),
+                      candidate > now else { continue }
+                return candidate
+            }
+        }
+        return Item.nextClockTime(hour: hour, minute: minute, after: now, calendar: calendar)
+    }
+
+    private static let everyWordRegex = try! NSRegularExpression(
+        pattern: #"\b(?:every|each)\b"#, options: [.caseInsensitive])
+
+    /// "weekly", "every week" (a quantity, "every 2 weeks", is an interval).
+    private static let weeklyRegex = try! NSRegularExpression(
+        pattern: #"\bweekly\b|\b(?:every|each)\s+week\b"#, options: [.caseInsensitive])
+
+    /// One-time, monthly, yearly and deadline schedules, worked out from the
+    /// text (`hour` / `minute`: a clock time already found in it). Nil when
+    /// there's no date, or a date with no time that reads as a goal's target
+    /// ("finish the album by Nov 5").
+    static func datedSchedule(in text: String, hour: Int?, minute: Int?, now: Date, calendar: Calendar,
+                              askedToRemind: Bool) -> (item: ParsedItem, ranges: [NSRange])? {
+        let ns = text as NSString
+        let full = NSRange(location: 0, length: ns.length)
+        var ranges: [NSRange] = []
+        func base() -> ParsedItem {
+            ParsedItem(kind: .scheduledRoutine, title: "", intervalSeconds: nil, hour: hour, minute: minute,
+                       weekdays: [], targetDate: nil)
+        }
+        func at(_ day: Date, defaultHour: Int) -> Date {
+            calendar.date(bySettingHour: hour ?? defaultHour, minute: hour == nil ? 0 : (minute ?? 0),
+                          second: 0, of: day) ?? day
+        }
+
+        let dueMatch = deadlineRegex.firstMatch(in: text, range: full)
+        let monthDate = monthDayDate(in: text)
+        let relative = relativeDay(in: text, now: now, calendar: calendar)
+        let soon = Self.inDuration(in: text)
+
+        // Deadline: "due Nov 10", "deadline tomorrow", "due in 3 days".
+        if let dueMatch {
+            var day: Date?
+            if let monthDate {
+                day = monthDate.date(now: now, calendar: calendar)
+                ranges.append(monthDate.range)
+            } else if let relative {
+                day = relative.day
+                ranges.append(relative.range)
+            } else if let soon {
+                day = now.addingTimeInterval(soon.seconds)
+                ranges.append(soon.range)
+            }
+            if let day {
+                ranges.append(dueMatch.range)
+                var item = base()
+                let due = calendar.startOfDay(for: day)
+                item.dueDate = due
+                item.hour = hour ?? 10
+                item.minute = hour == nil ? 0 : (minute ?? 0)
+                return (item, ranges)
+            }
+        }
+
+        // "in 2 hours", "in 30 min": once, from now.
+        if let soon {
+            var item = base()
+            let when = now.addingTimeInterval(soon.seconds)
+            item.onceAt = when
+            let parts = calendar.dateComponents([.hour, .minute], from: when)
+            item.hour = parts.hour
+            item.minute = parts.minute
+            return (item, [soon.range])
+        }
+
+        let everyYear = everyYearRegex.firstMatch(in: text, range: full)
+        let yearlyWord = yearlyWordRegex.firstMatch(in: text, range: full) != nil
+        let everyMonth = everyMonthRegex.firstMatch(in: text, range: full)
+
+        if let monthDate {
+            ranges.append(monthDate.range)
+            // "every Mar 12", "Mar 12 every year", birthdays and anniversaries.
+            if monthDate.everyBefore || everyYear != nil || yearlyWord {
+                if let everyYear { ranges.append(everyYear.range) }
+                var item = base()
+                item.monthDay = monthDate.day
+                item.yearMonth = monthDate.month
+                item.hour = hour ?? 9
+                item.minute = hour == nil ? 0 : (minute ?? 0)
+                return (item, ranges)
+            }
+            // A date with no time and no "remind me": a goal's target date.
+            guard hour != nil || askedToRemind else { return nil }
+            var item = base()
+            item.onceAt = at(monthDate.date(now: now, calendar: calendar), defaultHour: 9)
+            item.hour = hour ?? 9
+            item.minute = hour == nil ? 0 : (minute ?? 0)
+            return (item, ranges)
+        }
+
+        // "on the 1st", "every 15th", "1st of every month", "monthly".
+        let ordinal = ordinalDay(in: text)
+        if ordinal != nil || everyMonth != nil {
+            if let ordinal { ranges.append(ordinal.range) }
+            if let everyMonth { ranges.append(everyMonth.range) }
+            var item = base()
+            item.monthDay = ordinal?.day ?? calendar.component(.day, from: now)
+            item.hour = hour ?? 9
+            item.minute = hour == nil ? 0 : (minute ?? 0)
+            return (item, ranges)
+        }
+
+        // "every year" / "yearly" with no date: on today's date each year.
+        if let everyYear {
+            var item = base()
+            item.monthDay = calendar.component(.day, from: now)
+            item.yearMonth = calendar.component(.month, from: now)
+            item.hour = hour ?? 9
+            item.minute = hour == nil ? 0 : (minute ?? 0)
+            return (item, [everyYear.range])
+        }
+
+        // "tomorrow 3pm", "tonight", "today at 5".
+        if let relative {
+            // No time and no "remind me" ("finish the edit tomorrow"): a goal.
+            guard hour != nil || askedToRemind else { return nil }
+            var item = base()
+            let when = at(relative.day, defaultHour: relative.defaultHour)
+            item.onceAt = when
+            item.hour = calendar.component(.hour, from: when)
+            item.minute = calendar.component(.minute, from: when)
+            return (item, [relative.range])
+        }
+        return nil
+    }
+
+    struct MonthDate {
+        let month: Int
+        let day: Int
+        let year: Int?
+        let range: NSRange
+        /// "every" right before it: yearly.
+        let everyBefore: Bool
+
+        /// This date at the start of its day: this year, or next year once
+        /// it has gone (unless a year was written).
+        func date(now: Date, calendar: Calendar) -> Date {
+            let thisYear = calendar.component(.year, from: now)
+            var comps = DateComponents(year: year ?? thisYear, month: month, day: day)
+            var date = calendar.date(from: comps) ?? now
+            if year == nil, date < calendar.startOfDay(for: now) {
+                comps.year = thisYear + 1
+                date = calendar.date(from: comps) ?? date
+            }
+            return date
+        }
+    }
+
+    private static let monthPattern = #"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"#
+
+    private static let monthDateRegex = try! NSRegularExpression(
+        pattern: #"(?<every>\b(?:every|each)\s+)?(?:\bon\s+)?(?:\b(?<mon>"# + monthPattern + #")\.?\s+(?<day>\d{1,2})(?:st|nd|rd|th)?|\b(?:the\s+)?(?<day2>\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(?<mon2>"# + monthPattern + #")\.?)(?:,?\s+(?<year>20\d{2}))?(?![a-z0-9])"#,
+        options: [.caseInsensitive]
+    )
+
+    /// "Nov 5", "November 5th", "5 Nov", "the 5th of November", "Mar 12, 2027".
+    static func monthDayDate(in text: String) -> MonthDate? {
+        let ns = text as NSString
+        for match in monthDateRegex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            func part(_ name: String) -> String? {
+                let range = match.range(withName: name)
+                return range.location == NSNotFound ? nil : ns.substring(with: range)
+            }
+            guard let monthWord = part("mon") ?? part("mon2"),
+                  let dayText = part("day") ?? part("day2"), let day = Int(dayText) else { continue }
+            // "may" is also an everyday word: only "May" counts.
+            if monthWord.lowercased() == "may", monthWord.first?.isUppercase != true { continue }
+            let month = monthIndex(monthWord)
+            guard month > 0, (1...monthLength(month)).contains(day) else { continue }
+            return MonthDate(month: month, day: day, year: part("year").flatMap { Int($0) },
+                             range: match.range, everyBefore: part("every") != nil)
+        }
+        return nil
+    }
+
+    static func monthIndex(_ word: String) -> Int {
+        let prefixes = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+        let start = String(word.lowercased().prefix(3))
+        return (prefixes.firstIndex(of: start) ?? -1) + 1
+    }
+
+    /// Longest the month can be (February: 29, so leap-day birthdays work).
+    private static func monthLength(_ month: Int) -> Int {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
+    }
+
+    private static let ordinalRegex = try! NSRegularExpression(
+        pattern: #"(?:\b(?:on|every|each)\s+(?:the\s+)?|\bthe\s+)(?<day>\d{1,2})(?:st|nd|rd|th)\b(?:\s+of\s+(?:every|each|the|a)\s+month)?|\b(?<day2>\d{1,2})(?:st|nd|rd|th)\s+of\s+(?:every|each|the|a)\s+month\b"#,
+        options: [.caseInsensitive]
+    )
+
+    /// "on the 1st", "every 15th", "the 5th", "1st of every month" (not "my
+    /// 2nd draft": it needs "on" / "every" / "the" before, or "of the month" after).
+    static func ordinalDay(in text: String) -> (day: Int, range: NSRange)? {
+        let ns = text as NSString
+        guard let match = ordinalRegex.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)) else { return nil }
+        let range = match.range(withName: "day").location != NSNotFound ? match.range(withName: "day") : match.range(withName: "day2")
+        guard range.location != NSNotFound, let day = Int(ns.substring(with: range)), (1...31).contains(day) else { return nil }
+        return (day, match.range)
+    }
+
+    private static let relativeRegex = try! NSRegularExpression(
+        pattern: #"\b(?:(?<after>day\s+after\s+tomorrow)|(?<tomorrow>tomorrow|tmrw|tmr|tomorow|tommorow|tommorrow)|(?<tonight>tonight|tonite)|(?<today>today)|(?<nextday>next\s+(?<nweekday>mon|tue|wed|thu|fri|sat|sun)[a-z]*)|(?<thispart>this\s+(?<part>morning|afternoon|evening))|(?<thisday>this\s+(?<tweekday>mon|tue|wed|thu|fri|sat|sun)[a-z]*))\b(?:\s+(?:morning|evening|night))?"#,
+        options: [.caseInsensitive]
+    )
+
+    /// "today", "tonight" (8 PM), "tomorrow" (9 AM), "day after tomorrow".
+    static func relativeDay(in text: String, now: Date, calendar: Calendar)
+        -> (day: Date, defaultHour: Int, range: NSRange)? {
+        let ns = text as NSString
+        guard let match = relativeRegex.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)) else { return nil }
+        let today = calendar.startOfDay(for: now)
+        func has(_ name: String) -> Bool { match.range(withName: name).location != NSNotFound }
+        let phrase = ns.substring(with: match.range).lowercased()
+        let evening = phrase.hasSuffix("evening") || phrase.hasSuffix("night")
+        if has("after") {
+            return (calendar.date(byAdding: .day, value: 2, to: today) ?? today, evening ? 19 : 9, match.range)
+        }
+        if has("tomorrow") {
+            return (calendar.date(byAdding: .day, value: 1, to: today) ?? today, evening ? 19 : 9, match.range)
+        }
+        if has("tonight") { return (today, 20, match.range) }
+        if has("nextday") {
+            // "next monday": the coming one, never today.
+            let word = ns.substring(with: match.range(withName: "nweekday")).lowercased()
+            let targets = ["sun": 1, "mon": 2, "tue": 3, "wed": 4, "thu": 5, "fri": 6, "sat": 7]
+            let target = targets[word] ?? 2
+            let current = calendar.component(.weekday, from: today)
+            var ahead = (target - current + 7) % 7
+            if ahead == 0 { ahead = 7 }
+            return (calendar.date(byAdding: .day, value: ahead, to: today) ?? today, 9, match.range)
+        }
+        if has("thispart") {
+            let part = ns.substring(with: match.range(withName: "part")).lowercased()
+            return (today, ["morning": 9, "afternoon": 14, "evening": 19][part] ?? 18, match.range)
+        }
+        if has("thisday") {
+            // "this friday": the coming one, today included.
+            let word = ns.substring(with: match.range(withName: "tweekday")).lowercased()
+            let targets = ["sun": 1, "mon": 2, "tue": 3, "wed": 4, "thu": 5, "fri": 6, "sat": 7]
+            let current = calendar.component(.weekday, from: today)
+            let ahead = ((targets[word] ?? 6) - current + 7) % 7
+            return (calendar.date(byAdding: .day, value: ahead, to: today) ?? today, 9, match.range)
+        }
+        return (today, evening ? 19 : 18, match.range)
+    }
+
+    private static let inDurationRegex = try! NSRegularExpression(
+        pattern: #"\b(?:in|after)\s+(?:(?<qty>\d+(?:\.\d+)?)\s*(?<unit>sec[a-z]*|min[a-z]*|hou?r[a-z]*|hrs?|day[a-z]*|week[a-z]*|wk[a-z]*|s|m|h|d|w)|(?<wqty>half\s+an?|an?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|forty-five|fifty|sixty)\s+(?<wunit>sec[a-z]*|min[a-z]*|hou?r[a-z]*|hrs?|day[a-z]*|week[a-z]*|wk[a-z]*))\b"#,
+        options: [.caseInsensitive]
+    )
+
+    /// "in 2 hours", "in 30 min", "in an hour", "in half an hour", "in 3 days".
+    static func inDuration(in text: String) -> (seconds: Double, range: NSRange)? {
+        let ns = text as NSString
+        guard let match = inDurationRegex.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)) else { return nil }
+        func part(_ name: String) -> String? {
+            let range = match.range(withName: name)
+            return range.location == NSNotFound ? nil : ns.substring(with: range)
+        }
+        guard let qtyText = part("qty") ?? part("wqty"), let unit = (part("unit") ?? part("wunit"))?.lowercased(),
+              let quantity = parseQuantity(qtyText), quantity > 0 else { return nil }
+        return (quantity * unitSeconds(unit), match.range)
+    }
+
+    private static let deadlineRegex = try! NSRegularExpression(
+        pattern: #"\b(?:due|deadline)\b(?:\s*:)?(?:\s+(?:on|by|is))?"#,
+        options: [.caseInsensitive]
+    )
+
+    private static let everyYearRegex = try! NSRegularExpression(
+        pattern: #"\b(?:every|each)\s+year\b|\byearly\b|\bannually\b"#,
+        options: [.caseInsensitive]
+    )
+
+    /// Things that come round every year: a date with these is yearly.
+    private static let yearlyWordRegex = try! NSRegularExpression(
+        pattern: #"\b(?:birthday|bday|anniversary)\b"#,
+        options: [.caseInsensitive]
+    )
+
+    private static let everyMonthRegex = try! NSRegularExpression(
+        pattern: #"\b(?:every|each)\s+month\b|\bmonthly\b"#,
+        options: [.caseInsensitive]
+    )
+
+    // MARK: - Everyday wording
+
+    /// Rewrites everyday wording into the forms the rules below read:
+    /// "half past 6" → "6:30", "6 in the evening" → "6pm", "hourly" →
+    /// "every hour", "biweekly" → "every 2 weeks", "every other" → "every 2",
+    /// "last day of the month" → "on the 31st" (short months use their last day).
+    static func normalizePhrases(_ text: String) -> String {
+        var result = text
+        func replace(_ pattern: String, _ template: String) {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return }
+            result = regex.stringByReplacingMatches(in: result, range: NSRange(location: 0, length: (result as NSString).length),
+                                                    withTemplate: template)
+        }
+        replace(#"\s*@\s*(?=\d)"#, " at ")
+        replace(#"\bhalf\s+past\s+(\d{1,2})(?!\d)"#, "$1:30")
+        replace(#"\bquarter\s+past\s+(\d{1,2})(?!\d)"#, "$1:15")
+        // "quarter to 7" → "6:45"
+        if let regex = try? NSRegularExpression(pattern: #"\bquarter\s+to\s+(\d{1,2})(?!\d)"#, options: [.caseInsensitive]) {
+            let ns = result as NSString
+            for match in regex.matches(in: result, range: NSRange(location: 0, length: ns.length)).reversed() {
+                guard let hour = Int(ns.substring(with: match.range(at: 1))), (1...24).contains(hour) else { continue }
+                let before = hour == 1 ? 12 : hour - 1
+                result = (result as NSString).replacingCharacters(in: match.range, with: "\(before):45")
+            }
+        }
+        replace(#"\b(\d{1,2}(?:[:.]\d{2})?)\s+(?:o'?clock\s+)?in\s+the\s+morning\b"#, "$1am")
+        replace(#"\b(\d{1,2}(?:[:.]\d{2})?)\s+(?:o'?clock\s+)?in\s+the\s+(?:afternoon|evening)\b"#, "$1pm")
+        replace(#"\b(\d{1,2}(?:[:.]\d{2})?)\s+(?:o'?clock\s+)?(?:at|in\s+the)\s+night\b"#, "$1pm")
+        replace(#"\bmid-?day\b"#, "noon")
+        replace(#"\bthis\s+(morning|afternoon|evening)\b"#, "today $1")
+        replace(#"\bhourly\b"#, "every hour")
+        replace(#"\bevery\s+half\s+(?:an\s+)?hour\b"#, "every 30 minutes")
+        replace(#"\bevery\s+quarter\s+(?:of\s+an\s+)?hour\b"#, "every 15 minutes")
+        replace(#"\b(?:bi-?weekly|fortnightly|every\s+fortnight)\b"#, "every 2 weeks")
+        replace(#"\b(?:every\s+other|every\s+alternate|on\s+alternate|alternate)\s+(?=(?:day|week|sun|mon|tue|wed|thu|fri|sat))"#, "every 2 ")
+        replace(#"(?:\bon\s+)?(?:\bthe\s+)?\b(?:last\s+day\s+of\s+(?:the\s+|every\s+|each\s+)?month|end\s+of\s+(?:the\s+|every\s+|each\s+)?month|month[-\s]end)\b"#, "on the 31st")
+        return result
+    }
+
+    /// What step 0 of `parseSchedule` found: the text with those parts
+    /// blanked out, and the rules they set.
+    struct ScheduleRules {
+        var text: String
+        var extras = ScheduleExtras()
+        /// Weekday named by "first monday of the month".
+        var weekdays = Set<Int>()
+        /// "every morning" (8), "every afternoon" (14), "every evening" (19), "at night" (21).
+        var partHour: Int?
+        /// "twice a day" = 2.
+        var timesPerDay: Int?
+        /// Something here says it repeats ("every morning", "for 7 days",
+        /// "first monday of the month", "twice a day").
+        var repeats = false
+    }
+
+    static func scheduleRules(in original: String, now: Date, calendar: Calendar) -> ScheduleRules {
+        var rules = ScheduleRules(text: original)
+        func blank(_ range: NSRange) {
+            rules.text = (rules.text as NSString).replacingCharacters(
+                in: range, with: String(repeating: " ", count: range.length))
+        }
+        func full() -> NSRange { NSRange(location: 0, length: (rules.text as NSString).length) }
+        func part(_ match: NSTextCheckingResult, _ name: String) -> String? {
+            let range = match.range(withName: name)
+            return range.location == NSNotFound ? nil : (rules.text as NSString).substring(with: range).lowercased()
+        }
+        let weekdayIndex = ["sun": 1, "mon": 2, "tue": 3, "wed": 4, "thu": 5, "fri": 6, "sat": 7]
+
+        // End date: "for 7 days", "for 2 weeks", "for a month".
+        if let match = forPeriodRegex.firstMatch(in: rules.text, range: full()),
+           let amount = part(match, "n").flatMap(parseQuantity), amount >= 1,
+           let unit = part(match, "u") {
+            let start = calendar.startOfDay(for: now)
+            let end: Date?
+            if unit.hasPrefix("month") {
+                end = calendar.date(byAdding: .month, value: Int(amount), to: start)
+            } else {
+                end = calendar.date(byAdding: .day, value: Int(amount) * (unit.hasPrefix("week") ? 7 : 1), to: start)
+            }
+            if let end {
+                rules.extras.endsOn = end.addingTimeInterval(-1)
+                rules.repeats = true
+                blank(match.range)
+            }
+        }
+        // End date: "until Dec 1", "till 5 november".
+        if rules.extras.endsOn == nil, let match = untilRegex.firstMatch(in: rules.text, range: full()) {
+            let afterStart = match.range.location + match.range.length
+            let rest = (rules.text as NSString).substring(from: afterStart)
+            if let date = monthDayDate(in: rest), date.range.location <= 4 {
+                let day = date.date(now: now, calendar: calendar)
+                if let next = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: day)) {
+                    rules.extras.endsOn = next.addingTimeInterval(-1)
+                    rules.repeats = true
+                    blank(NSRange(location: match.range.location,
+                                  length: match.range.length + date.range.location + date.range.length))
+                }
+            }
+        }
+
+        // Active hours, only with an interval: "every hour from 9am to 6pm".
+        if intervalRegex.firstMatch(in: rules.text, range: full()) != nil,
+           let match = windowRegex.firstMatch(in: rules.text, range: full()) {
+            let hasLeadWord = part(match, "lead") != nil
+            let ap = part(match, "ap"), bp = part(match, "bp")
+            func clock(_ name: String) -> (Int, Int)? {
+                guard let text = part(match, name) else { return nil }
+                let pieces = text.split(whereSeparator: { $0 == ":" || $0 == "." }).map(String.init)
+                guard let h = Int(pieces[0]), (0...23).contains(h) else { return nil }
+                let m = pieces.count > 1 ? Int(pieces[1]) ?? 0 : 0
+                return (h, m)
+            }
+            if hasLeadWord || ap != nil || bp != nil, let first = clock("a"), let second = clock("b") {
+                var a = first.0, b = second.0
+                let am = first.1, bm = second.1
+                func apply(_ hour: inout Int, _ marker: String?) {
+                    guard let marker else { return }
+                    if marker.hasPrefix("p"), hour < 12 { hour += 12 }
+                    if marker.hasPrefix("a"), hour == 12 { hour = 0 }
+                }
+                apply(&a, ap)
+                apply(&b, bp)
+                if ap == nil, bp == nil {
+                    if a < 7 { a += 12 }           // "between 1 and 5" = afternoon
+                    if b <= a, b + 12 < 24 { b += 12 } // "from 9 to 5" = 9 AM–5 PM
+                } else if ap == nil, let bp, bp.hasPrefix("p"), a + 12 <= b {
+                    a += 12                        // "from 2 to 6pm" = 2 PM–6 PM
+                } else if bp == nil, b <= a, b + 12 < 24 {
+                    b += 12                        // "9am to 5" = 9 AM–5 PM
+                }
+                rules.extras.windowStart = a * 60 + am
+                rules.extras.windowEnd = b * 60 + bm
+                blank(match.range)
+            }
+        }
+
+        // Nth weekday of the month: "first monday of the month", "every last friday".
+        if let match = nthWeekdayRegex.firstMatch(in: rules.text, range: full()),
+           let nthWord = part(match, "n"), let dayWord = part(match, "wd"),
+           let weekday = weekdayIndex[String(dayWord.prefix(3))] {
+            let nthMap = ["first": 1, "1st": 1, "second": 2, "2nd": 2, "third": 3, "3rd": 3,
+                          "fourth": 4, "4th": 4, "fifth": 5, "5th": 5, "last": -1]
+            let nth = nthMap[nthWord] ?? 1
+            let saysMonth = part(match, "month") != nil
+            let saysEvery = part(match, "every") != nil
+            rules.weekdays = [weekday]
+            rules.repeats = true
+            if nth == 2, saysEvery, !saysMonth {
+                rules.extras.weekStep = 2  // "every second monday" = every other monday
+            } else {
+                rules.extras.monthWeek = nth
+            }
+            blank(match.range)
+            if rules.extras.monthWeek != nil {
+                for extra in everyMonthWordRegex.matches(in: rules.text, range: full()).reversed() { blank(extra.range) }
+            }
+        }
+
+        // "every 2 fridays" (from "every other friday"): every N weeks on that day.
+        if rules.extras.weekStep == nil, rules.extras.monthWeek == nil,
+           let match = everyNWeekdayRegex.firstMatch(in: rules.text, range: full()),
+           let n = part(match, "n").flatMap({ Int($0) }), n > 1 {
+            rules.extras.weekStep = n
+            rules.repeats = true
+            blank(match.range) // the weekday itself is read later
+        }
+
+        // "twice a day", "3 times a day", "once daily".
+        if let match = timesPerDayRegex.firstMatch(in: rules.text, range: full()) {
+            let word = (part(match, "n") ?? part(match, "n2") ?? "once")
+            let count: Int
+            if word.hasPrefix("once") || word.hasPrefix("1") { count = 1 }
+            else if word.hasPrefix("twice") || word.hasPrefix("two") || word.hasPrefix("2") { count = 2 }
+            else if word.hasPrefix("thrice") || word.hasPrefix("three") || word.hasPrefix("3") { count = 3 }
+            else { count = 4 }
+            rules.timesPerDay = count
+            rules.repeats = true
+            blank(match.range)
+        }
+
+        // Part of the day: "every morning", "evenings", "at night", "in the afternoon".
+        if let match = partOfDayRegex.firstMatch(in: rules.text, range: full()),
+           let word = part(match, "p") ?? part(match, "p2") ?? part(match, "p3") {
+            rules.partHour = ["morning": 8, "afternoon": 14, "evening": 19, "night": 21][word]
+            // "every morning", "mornings" repeat; "at night", "in the evening" alone don't.
+            if part(match, "p3") == nil { rules.repeats = true }
+            blank(match.range)
+        } else if let match = dayPartRegex.firstMatch(in: rules.text, range: full()),
+                  let word = part(match, "p") {
+            // "tomorrow morning", "today evening": the day stays for the date rules.
+            rules.partHour = ["morning": 8, "afternoon": 14, "evening": 19, "night": 21][word]
+            blank(match.range(withName: "p"))
+        } else if tonightRegex.firstMatch(in: rules.text, range: full()) != nil {
+            rules.partHour = 20 // "call mom tonight": a time, so a reminder, not a goal
+        }
+        return rules
+    }
+
+    /// Clock times joined by "and" or commas: "9am and 9pm", "8am, 1pm and 8pm".
+    static func timeChain(in text: String) -> [(minutes: Int, range: NSRange)] {
+        let ns = text as NSString
+        var times: [(minutes: Int, range: NSRange)] = []
+        for match in bareClockRegex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            guard let time = bareClockTime(in: ns.substring(with: match.range)) else { continue }
+            times.append((time.hour * 60 + time.minute, match.range))
+        }
+        var chain: [(minutes: Int, range: NSRange)] = []
+        for time in times {
+            if let previous = chain.last {
+                let gapStart = previous.range.location + previous.range.length
+                let gap = gapStart <= time.range.location
+                    ? ns.substring(with: NSRange(location: gapStart, length: time.range.location - gapStart)) : "x"
+                if timeSeparatorRegex.firstMatch(in: gap, range: NSRange(location: 0, length: (gap as NSString).length)) != nil {
+                    chain.append(time)
+                    continue
+                }
+                if chain.count >= 2 { return chain }
+            }
+            chain = [time]
+        }
+        return chain.count >= 2 ? chain : []
+    }
+
+    private static let timeSeparatorRegex = try! NSRegularExpression(
+        pattern: #"^\s*(?:,\s*and|,|and|&)\s*(?:at\s+)?$"#, options: [.caseInsensitive])
+
+    private static let forPeriodRegex = try! NSRegularExpression(
+        pattern: #"\bfor\s+(?:the\s+next\s+)?(?<n>\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fourteen|twenty|thirty)\s+(?<u>days?|weeks?|months?)\b"#,
+        options: [.caseInsensitive])
+
+    private static let untilRegex = try! NSRegularExpression(
+        pattern: #"\b(?:until|till|til|thru|through)\s+"#, options: [.caseInsensitive])
+
+    private static let windowRegex = try! NSRegularExpression(
+        pattern: #"(?<lead>\b(?:from|between)\s+)?\b(?<a>\d{1,2}(?:[:.]\d{2})?)\s*(?<ap>a\.?m\.?|p\.?m\.?)?\s*(?:to|and|until|till|-|–)\s*(?<b>\d{1,2}(?:[:.]\d{2})?)\s*(?<bp>a\.?m\.?|p\.?m\.?)?(?![a-z0-9])"#,
+        options: [.caseInsensitive])
+
+    private static let nthWeekdayRegex = try! NSRegularExpression(
+        pattern: #"(?:\b(?<every>every|each)\s+|\bon\s+)?(?:\bthe\s+)?\b(?<n>first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th|last)\s+(?<wd>sun|mon|tue|wed|thu|fri|sat)[a-z]*(?<month>\s+(?:of|in)\s+(?:the\s+|every\s+|each\s+)?month)?\b"#,
+        options: [.caseInsensitive])
+
+    private static let everyMonthWordRegex = try! NSRegularExpression(
+        pattern: #"\b(?:every|each)\s+month\b|\bmonthly\b"#, options: [.caseInsensitive])
+
+    private static let everyNWeekdayRegex = try! NSRegularExpression(
+        pattern: #"\bevery\s+(?<n>\d+)\s+(?=(?:sun|mon|tue|wed|thu|fri|sat)[a-z]*\b)"#, options: [.caseInsensitive])
+
+    private static let timesPerDayRegex = try! NSRegularExpression(
+        pattern: #"\b(?<n>once|twice|thrice|two\s+times|three\s+times|four\s+times|[1-4]\s*(?:x|times))\s+(?:a|per|each|every)\s+day\b|\b(?<n2>once|twice|thrice)\s+daily\b"#,
+        options: [.caseInsensitive])
+
+    private static let dayPartRegex = try! NSRegularExpression(
+        pattern: #"\b(?:tomorrow|tmrw|tmr|today)\s+(?:in\s+the\s+)?(?<p>morning|afternoon|evening|night)\b"#,
+        options: [.caseInsensitive])
+
+    private static let tonightRegex = try! NSRegularExpression(
+        pattern: #"\b(?:tonight|tonite)\b"#, options: [.caseInsensitive])
+
+    private static let partOfDayRegex = try! NSRegularExpression(
+        pattern: #"\b(?:every|each)\s+(?<p>morning|afternoon|evening|night)\b|\b(?<p2>morning|afternoon|evening|night)s\b|\b(?:in\s+the|at)\s+(?<p3>morning|afternoon|evening|night)\b"#,
+        options: [.caseInsensitive])
 
     // MARK: - Title cleanup
 
@@ -281,11 +1153,11 @@ enum ItemParser {
     // MARK: - Quantity / unit helpers
 
     static func unitSeconds(_ unit: String) -> Double {
-        if unit.hasPrefix("sec") { return 1 }
-        if unit.hasPrefix("min") { return 60 }
-        if unit.hasPrefix("hour") || unit.hasPrefix("hr") { return 3600 }
-        if unit.hasPrefix("day") { return 86400 }
-        if unit.hasPrefix("week") { return 604800 }
+        if unit.hasPrefix("s") { return 1 }
+        if unit.hasPrefix("m") { return 60 }
+        if unit.hasPrefix("h") { return 3600 }
+        if unit.hasPrefix("d") { return 86400 }
+        if unit.hasPrefix("w") { return 604800 }
         return 60
     }
 
@@ -334,9 +1206,9 @@ enum ItemParser {
             WeekdayMatcher(regex: regex(#"\bevery\s+day\b|\bdaily\b|\beveryday\b"#), weekdays: []),
             WeekdayMatcher(regex: regex(#"\bsun(day)?s?\b"#), weekdays: [1]),
             WeekdayMatcher(regex: regex(#"\bmon(day)?s?\b"#), weekdays: [2]),
-            WeekdayMatcher(regex: regex(#"\btue(s(day)?)?\b"#), weekdays: [3]),
+            WeekdayMatcher(regex: regex(#"\btue(?:s|sday|sdays)?\b"#), weekdays: [3]),
             WeekdayMatcher(regex: regex(#"\bwed(nesday)?s?\b"#), weekdays: [4]),
-            WeekdayMatcher(regex: regex(#"\bthu(r(s(day)?)?)?\b"#), weekdays: [5]),
+            WeekdayMatcher(regex: regex(#"\bthu(?:r|rs|rsday|rsdays)?\b"#), weekdays: [5]),
             WeekdayMatcher(regex: regex(#"\bfri(day)?s?\b"#), weekdays: [6]),
             WeekdayMatcher(regex: regex(#"\bsat(urday)?s?\b"#), weekdays: [7]),
             WeekdayMatcher(regex: regex(#"\bweekdays?\b"#), weekdays: [2, 3, 4, 5, 6]),
@@ -347,12 +1219,55 @@ enum ItemParser {
     // MARK: - Regexes
 
     private static let intervalRegex = try! NSRegularExpression(
-        pattern: #"every\s+(?:(?<qty>[a-z]+(?:[\s-][a-z]+)*|\d+(?:\.\d+)?)\s+)?(?<unit>seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?)\b"#,
+        // Words + full unit ("every forty minutes"), digits + any unit incl.
+        // shortcuts ("every 40m", "every 2 hrs", "every 30 sec"), or a bare
+        // unit ("every hour"). Single-letter units only after digits.
+        // Unit words tolerate typos past their first letters ("minuts",
+        // "mintue", "houres").
+        pattern: #"every\s+(?:(?<qty>[a-z]+(?:[\s-][a-z]+)*)\s+(?<unit>"# + unitWord + #")|(?<qty2>\d+(?:\.\d+)?)\s*(?<unit2>"# + unitWord + #"|s|m|h|d|w)|(?<unit3>"# + unitWord + #"))\b"#,
         options: [.caseInsensitive]
     )
 
+    private static let unitWord = #"(?:sec[a-z]*|min[a-z]*|hou?r[a-z]*|hr[a-z]*|day[a-z]*|week(?!day|end|night)[a-z]*|wk[a-z]*)"#
+
     private static let clockAtRegex = try! NSRegularExpression(
-        pattern: #"\bat\s+(?<hour>\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?:\s*:\s*(?<minute>\d{2}))?\s*(?<ampm>a\.?m\.?|p\.?m\.?|o'clock)?"#,
+        pattern: #"\bat\s+(?<hour>\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?:\s*[:.]\s*(?<minute>\d{2}))?\s*(?<ampm>a\.?m\.?|p\.?m\.?|o'clock)?"#,
+        options: [.caseInsensitive]
+    )
+
+    /// A clock time written without "at": "6pm", "every 6pm" (daily),
+    /// "6:30 pm", "9.15am", "six pm", "21:00". It needs am/pm or a colon
+    /// with minutes, so plain numbers ("3 glasses", "2 times") never count.
+    /// A leading "every" / "each" goes with it, so the title stays clean.
+    static func bareClockTime(in text: String) -> (hour: Int, minute: Int, range: NSRange)? {
+        let ns = text as NSString
+        for match in bareClockRegex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            func part(_ name: String) -> String? {
+                let range = match.range(withName: name)
+                return range.location == NSNotFound ? nil : ns.substring(with: range).lowercased()
+            }
+            guard let hourWord = part("hour") else { continue }
+            let ampm = part("ampm")
+            let minute = part("minute").flatMap { Int($0) }
+            // Without am/pm only "18:00"-style (a colon and minutes) counts.
+            if ampm == nil, minute == nil || part("sep") != ":" { continue }
+            guard var hour = Int(hourWord) ?? wordNumbers[hourWord].map(Int.init) else { continue }
+            if let ampm {
+                guard (1...12).contains(hour) else { continue }
+                if ampm.hasPrefix("p"), hour != 12 { hour += 12 }
+                if ampm.hasPrefix("a"), hour == 12 { hour = 0 }
+            } else if !(0...23).contains(hour) {
+                continue
+            }
+            let minutes = minute ?? 0
+            guard (0...59).contains(minutes) else { continue }
+            return (hour, minutes, match.range)
+        }
+        return nil
+    }
+
+    private static let bareClockRegex = try! NSRegularExpression(
+        pattern: #"(?:\b(?:every|each)\s+)?\b(?<hour>\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?:\s*(?<sep>[:.])\s*(?<minute>\d{2}))?\s*(?<ampm>a\.?m\.?|p\.?m\.?)?(?![a-z0-9])"#,
         options: [.caseInsensitive]
     )
 

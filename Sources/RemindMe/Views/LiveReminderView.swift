@@ -8,8 +8,8 @@ import SwiftUI
 /// middle, angry on the last — and each button gets a short reaction (happy
 /// hop / dozing off / crying) before the panel closes.
 ///
-/// Snooze opens a row of lengths (set in Settings → Smart). Keyboard: ⌃⌥D /
-/// ⌃⌥S / ⌃⌥K from any app, or Return / S / K while the card has focus.
+/// Snooze opens a row of lengths (set in Settings → Smart). Keyboard: ⌥D /
+/// ⌥S / ⌥K from any app (changeable in Settings → Smart), or Return / S / K while the card has focus.
 struct LiveReminderView: View {
     let occurrence: Occurrence
     let theme: PanelTheme
@@ -18,6 +18,7 @@ struct LiveReminderView: View {
     @ObservedObject private var escalationStore = EscalationSettingsStore.shared
     @ObservedObject private var snoozeSettings = AppSettings.snooze
     @ObservedObject private var smart = AppSettings.smart
+    @ObservedObject private var ignored = AppSettings.ignored
     @State private var reaction: FaceMood?
     @State private var choosingSnooze: Bool
 
@@ -32,14 +33,27 @@ struct LiveReminderView: View {
         _choosingSnooze = State(initialValue: choosingSnooze)
     }
 
+    /// Left unfinished again and again: it comes back angry from the start.
+    private var loud: Bool {
+        occurrence.item.map { ignored.value.isLoud($0.id) } ?? false
+    }
+
     private var mood: FaceMood {
-        reaction ?? FaceMood.forPop(
+        if let reaction { return reaction }
+        if loud { return .urgent }
+        return FaceMood.forPop(
             count: occurrence.remindersSentCount,
             maxPops: escalationStore.settings.maxReminders
         )
     }
 
     private var presets: [Int] { snoozeSettings.value.presets.sorted() }
+
+    /// A line for this habit, the same one for as long as this card is up.
+    private var quote: String {
+        let bytes = occurrence.id.uuid
+        return ReminderQuotes.habitQuote(for: occurrence.item?.title ?? "", pick: Int(bytes.0) * 256 + Int(bytes.1))
+    }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -52,6 +66,18 @@ struct LiveReminderView: View {
                 .lineLimit(2)
                 .frame(maxWidth: .infinity)
 
+            if loud, let id = occurrence.item?.id {
+                Text(ReminderScheduler.loudLine(times: ignored.value.count(for: id)))
+                    .font(.system(size: max(theme.fontSize - 3, 9.5), weight: .semibold).italic())
+                    .foregroundStyle(Color.red.opacity(0.9))
+                    .lineLimit(1)
+            } else {
+                Text("“\(quote)”")
+                    .font(.system(size: max(theme.fontSize - 3, 9.5)).italic())
+                    .foregroundStyle(theme.text.opacity(0.5))
+                    .lineLimit(1)
+            }
+
             Group {
                 if choosingSnooze {
                     snoozeRow
@@ -61,16 +87,15 @@ struct LiveReminderView: View {
             }
             .disabled(reaction != nil)
 
-            if smart.value.globalShortcuts {
-                Text(shortcutHint)
-                    .font(.system(size: 9.5))
-                    .foregroundStyle(theme.text.opacity(0.35))
-                    .lineLimit(1)
-            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(
+            RoundedRectangle(cornerRadius: theme.cornerRadius, style: .continuous)
+                .strokeBorder(Color.red.opacity(loud ? 0.75 : 0), lineWidth: 3)
+                .allowsHitTesting(false)
+        )
         .onChange(of: scheduler.shortcutRequest) {
             guard let request = scheduler.shortcutRequest else { return }
             scheduler.consumeShortcut()
@@ -82,20 +107,24 @@ struct LiveReminderView: View {
         }
     }
 
+    /// Three buttons, nothing else: Done, Snooze (the shortest length, 5m by
+    /// default; right-click it for the others) and Skip. Shortcuts are in
+    /// the tooltips.
     private var mainRow: some View {
-        HStack(spacing: 8) {
+        let shortest = presets.first ?? 5
+        return HStack(spacing: 8) {
             actionButton("Done", icon: "checkmark.circle.fill", tint: theme.accent, action: done)
                 .keyboardShortcut(.return, modifiers: [])
                 .help("Done — \(GlobalHotkeys.label(for: .done))")
-            actionButton("Snooze", icon: "moon.zzz.fill", tint: theme.text.opacity(0.85)) {
-                if presets.count > 1 {
-                    withAnimation(.easeOut(duration: 0.15)) { choosingSnooze = true }
-                } else {
-                    snooze(minutes: presets.first)
+            actionButton("Snooze \(SnoozeSettings.label(shortest))", icon: "moon.zzz.fill",
+                         tint: theme.text.opacity(0.85)) { snooze(minutes: shortest) }
+                .keyboardShortcut("s", modifiers: [])
+                .help("Snooze \(SnoozeSettings.label(shortest)) — \(GlobalHotkeys.label(for: .snooze)). Right-click for longer.")
+                .contextMenu {
+                    ForEach(presets, id: \.self) { minutes in
+                        Button("Snooze \(SnoozeSettings.label(minutes))") { snooze(minutes: minutes) }
+                    }
                 }
-            }
-            .keyboardShortcut("s", modifiers: [])
-            .help("Snooze — \(GlobalHotkeys.label(for: .snooze)) snoozes \(SnoozeSettings.label(snoozeSettings.value.defaultMinutes))")
             actionButton("Skip", icon: "arrow.uturn.forward.circle", tint: theme.text.opacity(0.6), action: skip)
                 .keyboardShortcut("k", modifiers: [])
                 .help("Skip — \(GlobalHotkeys.label(for: .skip))")

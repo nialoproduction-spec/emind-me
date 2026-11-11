@@ -46,6 +46,16 @@ final class ReminderPanelController: ObservableObject {
     private(set) var panel: ReminderPanel!
     private var hostingView: NSHostingView<AnyView>!
     @Published private(set) var isExpanded = false
+    /// The Settings page is open inside the panel: keep the panel up, and
+    /// wide enough for its sidebar.
+    var isSettingsOpen = false {
+        didSet {
+            guard isSettingsOpen != oldValue, isOnScreen, isExpanded else { return }
+            resize(to: openSize, animated: true)
+        }
+    }
+    /// The open panel's size: the list's, or Settings' while that's up.
+    private var openSize: CGSize { isSettingsOpen ? Self.settingsSize : Self.expandedSize }
     /// True while the panel is fading out. The SwiftUI layer keeps drawing
     /// whatever it was showing until the fade finishes, so nothing swaps
     /// mid-fade.
@@ -56,6 +66,9 @@ final class ReminderPanelController: ObservableObject {
     private var lastEngaged = Date.distantPast
     private var idleWatch: Task<Void, Never>?
     private var outsideClickMonitor: Any?
+    /// Set right after adding something: the panel doesn't auto-hide until
+    /// the next click elsewhere.
+    private var heldUntilClick = false
     /// Bumped on every show/hide so a fade-out that's been overtaken by a new
     /// show doesn't take the panel off screen when it completes.
     private var visibilityGeneration = 0
@@ -67,6 +80,7 @@ final class ReminderPanelController: ObservableObject {
 
     private static let collapsedSize = CGSize(width: 220, height: 56)
     static let expandedSize = CGSize(width: 340, height: 480)
+    static let settingsSize = CGSize(width: 640, height: 540)
     /// Face window + up to two lines of title + buttons + shortcut hint.
     static let liveReminderSize = CGSize(width: 280, height: 222)
 
@@ -144,6 +158,7 @@ final class ReminderPanelController: ObservableObject {
     func hide() {
         guard let panel, isOnScreen else { return }
         isHiding = true
+        heldUntilClick = false
         stopWatching()
         visibilityGeneration += 1
         let generation = visibilityGeneration
@@ -168,30 +183,35 @@ final class ReminderPanelController: ObservableObject {
         resize(to: Self.collapsedSize, animated: false)
     }
 
-    /// Menu bar click: show the pill (it then hides itself), or put the
-    /// panel away if it's already up. A reminder waiting for an answer is
-    /// never put away this way — the click brings it to the front instead.
+    /// Menu bar click: open the main page (the list), or put the panel away
+    /// if it's already up. A reminder waiting for an answer is never put away
+    /// this way — the click brings it to the front instead.
     func toggleVisibility() {
         guard panel != nil else { return }
         if isOverlayActive {
             show()
         } else if isOnScreen {
-            hide()
+            if isExpanded { hide() } else { setExpanded(true) }
         } else {
-            show()
+            openMainPage()
         }
     }
 
-    /// Right after a new reminder is saved: let the confirmation register for
-    /// a moment, then fade away — unless they've already started typing the
-    /// next one.
-    func closeAfterAdding() {
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(450))
-            guard let self, !self.isOverlayActive,
-                  PanelDraft.shared.text.isEmpty, PanelDraft.shared.pending == nil else { return }
-            self.hide()
-        }
+    /// Straight to the list at full size, fading in (no pill first).
+    func openMainPage() {
+        guard panel != nil else { return }
+        isExpanded = true
+        if !isOnScreen { resize(to: openSize, animated: false) }
+        show()
+        if isOnScreen { resize(to: openSize, animated: true) }
+    }
+
+    /// Right after something is added: the panel stays up, however long it
+    /// sits, until the person clicks somewhere else on the screen (so they can
+    /// see it in the list, or add another one).
+    func keepOpenUntilClickAway() {
+        heldUntilClick = true
+        lastEngaged = Date()
     }
 
     /// Typing in the panel counts as using it, even with the pointer elsewhere.
@@ -246,6 +266,8 @@ final class ReminderPanelController: ObservableObject {
     private var isPinned: Bool {
         guard let panel else { return false }
         return isOverlayActive
+            || heldUntilClick
+            || isSettingsOpen
             || panel.attachedSheet != nil
             || panel.frame.contains(NSEvent.mouseLocation)
     }
@@ -263,7 +285,7 @@ final class ReminderPanelController: ObservableObject {
     }
 
     private func handleClickElsewhere() {
-        guard isOnScreen, !isOverlayActive, panel?.attachedSheet == nil else { return }
+        guard isOnScreen, !isOverlayActive, !isSettingsOpen, panel?.attachedSheet == nil else { return }
         hide()
     }
 
@@ -277,7 +299,7 @@ final class ReminderPanelController: ObservableObject {
         lastEngaged = now
         if !expanded { shownAt = now } // collapsed back to the pill: it peeks, then goes
 
-        let size = expanded ? Self.expandedSize : Self.collapsedSize
+        let size = expanded ? openSize : Self.collapsedSize
         let newFrame = targetFrame(for: size)
 
         if animated {
@@ -320,7 +342,7 @@ final class ReminderPanelController: ObservableObject {
             rememberStateBeforeOverlay()
             return
         }
-        presentForced(size: Self.expandedSize, expanded: true)
+        presentForced(size: openSize, expanded: true)
     }
 
     func dismissOverlay() {
@@ -360,10 +382,11 @@ final class ReminderPanelController: ObservableObject {
             }
             return
         }
-        if scheduler.showEndOfDaySummary || scheduler.showWeeklySummary {
+        if scheduler.showMissed || scheduler.showGoalCheckIn || scheduler.showEndOfDaySummary
+            || scheduler.showWeeklySummary {
             isExpanded = true
             show()
-            resize(to: Self.expandedSize, animated: true)
+            resize(to: openSize, animated: true)
             return
         }
 
@@ -375,7 +398,7 @@ final class ReminderPanelController: ObservableObject {
             // put it back, and let the normal idle rules take it from there.
             isExpanded = true
             lastEngaged = Date()
-            resize(to: Self.expandedSize, animated: true)
+            resize(to: openSize, animated: true)
         } else if isOnScreen {
             // It was only ever a notification: fade away rather than leave
             // the pill stuck on screen.
@@ -404,6 +427,17 @@ final class ReminderPanelController: ObservableObject {
     }
 
     // MARK: - Placement
+
+    /// Where a popup of `size` goes: the same spot as the panel's pill.
+    func frameForNotice(size: CGSize) -> NSRect {
+        targetFrame(for: size)
+    }
+
+    /// The panel's frame while it's on screen, else nil.
+    var visibleFrameOnScreen: NSRect? {
+        isOnScreen ? panel?.frame : nil
+    }
+
 
     /// Where a panel of `size` belongs right now, per the placement setting.
     private func targetFrame(for size: CGSize) -> NSRect {

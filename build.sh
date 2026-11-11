@@ -19,8 +19,10 @@ cd "$(dirname "$0")"
 
 ARCH="$(uname -m)"
 if [ "$ARCH" != "arm64" ]; then
-    echo "error: Remind Me is Apple Silicon only (built on $ARCH)." >&2
-    exit 1
+    # The app itself is still Apple Silicon only: --arch arm64 below
+    # cross-compiles it. (CI uses an Intel runner when Apple Silicon runners
+    # are out of capacity.)
+    echo "note: building on $ARCH — cross-compiling for Apple Silicon (arm64)."
 fi
 
 APP_NAME="RemindMe"
@@ -42,14 +44,25 @@ mkdir -p "${APP_DIR}/Contents/MacOS"
 mkdir -p "${APP_DIR}/Contents/Resources"
 
 cp "${BUILD_DIR}/${APP_NAME}" "${APP_DIR}/Contents/MacOS/${APP_NAME}"
+# Smaller app: drop debug and local symbols from the release binary (it's
+# already built with -O and whole-module optimisation by -c release).
+BEFORE=$(stat -f%z "${APP_DIR}/Contents/MacOS/${APP_NAME}" 2>/dev/null || echo 0)
+strip -Sx "${APP_DIR}/Contents/MacOS/${APP_NAME}"
+AFTER=$(stat -f%z "${APP_DIR}/Contents/MacOS/${APP_NAME}" 2>/dev/null || echo 0)
+echo "   binary: ${BEFORE} -> ${AFTER} bytes"
 cp "Resources/Info.plist" "${APP_DIR}/Contents/Info.plist"
+
+# Launch agent: starts Remind Me at login and restarts it after a crash.
+mkdir -p "${APP_DIR}/Contents/Library/LaunchAgents"
+cp "Resources/com.anshukc.remindme.keepalive.plist" "${APP_DIR}/Contents/Library/LaunchAgents/"
 
 if [ -f "Resources/AppIcon.icns" ]; then
     cp "Resources/AppIcon.icns" "${APP_DIR}/Contents/Resources/AppIcon.icns"
 fi
 
 echo "-> Signing app (identity: ${IDENTITY})..."
-codesign --force --deep --options runtime --sign "${IDENTITY}" "${APP_DIR}"
+codesign --force --deep --options runtime --entitlements "Resources/RemindMe.entitlements" \
+    --sign "${IDENTITY}" "${APP_DIR}"
 codesign --verify --verbose "${APP_DIR}"
 
 echo "-> Building disk image..."
@@ -59,11 +72,12 @@ cp -R "${APP_DIR}" "${DMG_STAGING}/"
 ln -s /Applications "${DMG_STAGING}/Applications"
 
 rm -f "${DMG_PATH}"
+# ULFO = LZFSE compression: smaller and faster to open than the old UDZO.
 # hdiutil occasionally fails with "Resource busy" (common on CI Macs) —
 # retry a few times before giving up.
 for attempt in 1 2 3; do
     if hdiutil create -volname "${DISPLAY_NAME}" -srcfolder "${DMG_STAGING}" \
-        -fs HFS+ -ov -format UDZO "${DMG_PATH}"; then
+        -fs HFS+ -ov -format ULFO "${DMG_PATH}"; then
         break
     fi
     if [ "$attempt" = 3 ]; then

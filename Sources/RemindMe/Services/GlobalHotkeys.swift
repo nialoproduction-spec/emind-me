@@ -2,73 +2,58 @@ import AppKit
 import Carbon.HIToolbox
 import Combine
 
-/// System-wide shortcuts for the reminder on screen — ⌃⌥D Done, ⌃⌥S Snooze,
-/// ⌃⌥K Skip — so it can be answered without reaching for the mouse or
-/// leaving the app you're in.
-///
-/// They're registered only while a reminder is showing (and released right
-/// after), so they never block those keys in other apps the rest of the
-/// time. Uses the system hot-key service, which needs no Accessibility
-/// permission and never sees any other keystrokes.
+/// System-wide shortcuts. Done, Snooze and Skip answer the reminder on screen,
+/// so they're registered only while one is showing. Undo works any time. The
+/// keys are whatever Settings → Smart holds (default: Option plus a letter).
+/// Uses the system hot-key service, so no Accessibility permission is needed.
 @MainActor
 final class GlobalHotkeys {
     static let shared = GlobalHotkeys()
 
-    struct Binding {
-        let id: UInt32
-        let keyCode: UInt32
-        let key: String
-        let action: ReminderScheduler.ShortcutAction
-    }
-
-    static let bindings: [Binding] = [
-        Binding(id: 1, keyCode: UInt32(kVK_ANSI_D), key: "D", action: .done),
-        Binding(id: 2, keyCode: UInt32(kVK_ANSI_S), key: "S", action: .snooze),
-        Binding(id: 3, keyCode: UInt32(kVK_ANSI_K), key: "K", action: .skip),
-    ]
-    static let modifiers = UInt32(controlKey | optionKey)
-    static let modifierSymbols = "⌃⌥"
     /// "RMND"
     private static let signature: OSType = 0x524D_4E44
 
     static func label(for action: ReminderScheduler.ShortcutAction) -> String {
-        guard let binding = bindings.first(where: { $0.action == action }) else { return "" }
-        return modifierSymbols + binding.key
+        KeyBindings.store.value[KeyBindings.Action(action)].display
     }
 
     private var hotKeyRefs: [EventHotKeyRef] = []
     private var handlerRef: EventHandlerRef?
-    private var subscription: AnyCancellable?
-    private var settingsSubscription: AnyCancellable?
+    private var subscriptions: [AnyCancellable] = []
 
     private init() {}
 
     func start() {
         installHandler()
-        let scheduler = ReminderScheduler.shared
-        subscription = scheduler.$activeOccurrence
-            .map { $0 != nil }
-            .removeDuplicates()
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.refresh() }
-        settingsSubscription = AppSettings.smart.$value
-            .map(\.globalShortcuts)
-            .removeDuplicates()
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.refresh() }
+        subscriptions = [
+            ReminderScheduler.shared.$activeOccurrence
+                .map { $0 != nil }
+                .removeDuplicates()
+                .receive(on: RunLoop.main)
+                .sink { [weak self] _ in self?.refresh() },
+            AppSettings.smart.$value
+                .map(\.globalShortcuts)
+                .removeDuplicates()
+                .receive(on: RunLoop.main)
+                .sink { [weak self] _ in self?.refresh() },
+            KeyBindings.store.$value
+                .removeDuplicates()
+                .receive(on: RunLoop.main)
+                .sink { [weak self] _ in self?.refresh() },
+        ]
+        refresh()
     }
 
     private func refresh() {
-        let wanted = ReminderScheduler.shared.activeOccurrence != nil && AppSettings.smart.value.globalShortcuts
-        if wanted { register() } else { unregister() }
-    }
-
-    private func register() {
-        guard hotKeyRefs.isEmpty else { return }
-        for binding in Self.bindings {
+        unregister()
+        guard AppSettings.smart.value.globalShortcuts else { return }
+        let reminderShowing = ReminderScheduler.shared.activeOccurrence != nil
+        for (index, action) in KeyBindings.Action.allCases.enumerated() {
+            guard !action.needsReminder || reminderShowing else { continue }
+            let binding = KeyBindings.store.value[action]
             var ref: EventHotKeyRef?
-            let id = EventHotKeyID(signature: Self.signature, id: binding.id)
-            let status = RegisterEventHotKey(binding.keyCode, Self.modifiers, id,
+            let id = EventHotKeyID(signature: Self.signature, id: UInt32(index + 1))
+            let status = RegisterEventHotKey(UInt32(binding.keyCode), binding.carbonModifiers, id,
                                              GetApplicationEventTarget(), 0, &ref)
             // Taken by another app: skip that one, keep the others.
             if status == noErr, let ref { hotKeyRefs.append(ref) }
@@ -86,9 +71,16 @@ final class GlobalHotkeys {
         InstallEventHandler(GetApplicationEventTarget(), hotKeyEventHandler, 1, &spec, nil, &handlerRef)
     }
 
+    /// Ids are 1-based positions in `KeyBindings.Action.allCases`, as registered in `refresh`.
     fileprivate static func handle(id: UInt32) {
-        guard let binding = bindings.first(where: { $0.id == id }) else { return }
-        ReminderScheduler.shared.requestShortcut(binding.action)
+        let actions = KeyBindings.Action.allCases
+        guard id >= 1, Int(id) <= actions.count else { return }
+        switch actions[Int(id) - 1] {
+        case .undo: _ = UndoCenter.shared.undoLast()
+        case .done: ReminderScheduler.shared.requestShortcut(.done)
+        case .snooze: ReminderScheduler.shared.requestShortcut(.snooze)
+        case .skip: ReminderScheduler.shared.requestShortcut(.skip)
+        }
     }
 }
 

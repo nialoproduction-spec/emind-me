@@ -35,5 +35,11 @@
     <true/>
     <key>NSSupportsSuddenTermination</key>
     <true/>
+    <!-- Voice: the mic is used only while Command is held. Speech is turned
+         into text on this Mac; nothing is sent anywhere. -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Remind Me listens only while you hold Command, to turn your speech into a reminder.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Remind Me turns your speech into text on this Mac, so you can add reminders by voice.</string>
 </dict>
 </plist>
