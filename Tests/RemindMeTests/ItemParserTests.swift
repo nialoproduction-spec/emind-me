@@ -32,14 +32,16 @@ final class ItemParserTests: XCTestCase {
         XCTAssertEqual(p.title, "Walk")
     }
 
-    func testReadABookAtSevenAM_DefaultsToDaily() {
+    func testReadABookAtSevenAM_IsOneTime() {
         let p = ItemParser.parse("read a book at seven a.m.")
         XCTAssertEqual(p.kind, .scheduledRoutine)
         XCTAssertEqual(p.hour, 7)
         XCTAssertEqual(p.minute, 0)
         XCTAssertTrue(p.weekdays.isEmpty)
         XCTAssertEqual(p.title, "Read a book")
-        XCTAssertTrue(p.detailLine.hasSuffix("Daily"), p.detailLine)
+        // No "every" / "daily": it goes off once, it does not repeat.
+        XCTAssertNotNil(p.onceAt)
+        XCTAssertTrue(p.detailLine.hasPrefix("Once"), p.detailLine)
     }
 
     func testGoToGodavariIsAGoal() {
