@@ -215,7 +215,9 @@ enum Insights {
     /// "You usually do it around 4:35 — move it there?" for timed routines
     /// done consistently 20+ minutes off their set time.
     private static func timeSuggestion(_ item: Item, recent: [Occurrence], calendar: Calendar) -> Suggestion? {
-        guard item.kind == .scheduledRoutine, let hour = item.hour, let minute = item.minute else { return nil }
+        // Only for repeating clock times: a one-time reminder has nothing to move.
+        guard item.kind == .scheduledRoutine, item.onceAt == nil, item.dueDate == nil,
+              let hour = item.hour, let minute = item.minute else { return nil }
         // Measured against the time it's set to now, by time of day.
         let setAt = Double(hour * 60 + minute)
         let offsets = recent.compactMap { occurrence -> Double? in

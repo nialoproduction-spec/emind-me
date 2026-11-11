@@ -122,6 +122,7 @@ struct ManageRemindersView: View {
         var status = ""
         if item.kind == .goal, item.isAchieved { status = "Achieved" }
         if item.kind != .goal, !item.isActive { status = "Paused" }
+        if item.kind != .goal, item.isOver { status = "Finished" }
         switch (summary.isEmpty, status.isEmpty) {
         case (true, true): return item.kind == .goal ? "Goal" : "Routine"
         case (false, true): return summary

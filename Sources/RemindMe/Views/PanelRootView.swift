@@ -88,15 +88,22 @@ struct PanelRootView: View {
                 )
                 .transition(.opacity)
             case .expanded:
-                ExpandedPanelView(
-                    items: items,
-                    occurrences: occurrences,
-                    todayOccurrences: todayOccurrences,
-                    theme: themeStore.theme,
-                    onCollapse: collapse,
-                    onShowSettings: { showingSettings = true }
-                )
-                .transition(.opacity)
+                // Settings is a page inside the panel (not a sheet: a sheet on
+                // this non-activating panel drew an opaque system background).
+                if showingSettings {
+                    SettingsView(isPresented: $showingSettings)
+                        .transition(.opacity)
+                } else {
+                    ExpandedPanelView(
+                        items: items,
+                        occurrences: occurrences,
+                        todayOccurrences: todayOccurrences,
+                        theme: themeStore.theme,
+                        onCollapse: collapse,
+                        onShowSettings: { showingSettings = true }
+                    )
+                    .transition(.opacity)
+                }
             case .pill:
                 CollapsedPillView(
                     activeItems: active,
@@ -108,9 +115,9 @@ struct PanelRootView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: themeStore.theme.cornerRadius, style: .continuous))
-        .sheet(isPresented: $showingSettings) {
-            SettingsView(isPresented: $showingSettings)
-        }
+        // While Settings is open the panel is wider and stays up (the colour
+        // picker is a separate window, so the pointer leaves the panel).
+        .onChange(of: showingSettings) { controller.isSettingsOpen = showingSettings }
         // Remember the overlay while it's up; forget it once it's gone and
         // the panel isn't mid-fade (e.g. it went back to the open list).
         .onChange(of: scheduler.activeOccurrence?.id) {

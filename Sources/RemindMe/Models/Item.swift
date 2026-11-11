@@ -203,6 +203,29 @@ final class Item {
         if !isGoal, nextFireDate == nil, onceAt != nil { nextFireDate = now }
     }
 
+    /// Works out the next firing when a pause ends or it's resumed. A
+    /// one-time reminder whose moment passed while it was paused is over
+    /// (missed), never quietly moved to tomorrow.
+    func arm(after now: Date, calendar: Calendar = .current) {
+        nextFireDate = computeNextFireDate(after: now, calendar: calendar)
+        if onceAt != nil, nextFireDate == nil {
+            isActive = false
+            if endedAt == nil { endedAt = now }
+        }
+    }
+
+    /// The next time the clock shows `hour:minute`, strictly after `reference`.
+    static func nextClockTime(hour: Int, minute: Int, after reference: Date,
+                              calendar: Calendar = .current) -> Date? {
+        for offset in 0..<3 {
+            guard let day = calendar.date(byAdding: .day, value: offset, to: reference),
+                  let candidate = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day),
+                  candidate > reference else { continue }
+            return candidate
+        }
+        return nil
+    }
+
     // MARK: - Scheduling
 
     /// What kind of clock-time schedule it is.

@@ -163,7 +163,7 @@ struct SettingsView: View {
                 }
             }
         }
-        .frame(width: 640, height: 540)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Flat.background)
         .environment(\.colorScheme, .dark)
         .tint(Flat.red)

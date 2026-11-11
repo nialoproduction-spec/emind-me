@@ -79,8 +79,9 @@ enum ItemActions {
         guard item.kind != .goal else { return }
         item.isActive = true
         item.pausedUntil = nil
-        // Recompute from now rather than resuming against a stale time.
-        item.nextFireDate = item.computeNextFireDate(after: now)
+        // Recompute from now rather than resuming against a stale time. A
+        // one-time reminder whose moment has passed is over, not moved.
+        item.arm(after: now)
         (reschedule ?? { NotificationService.shared.schedule(for: $0) })(item)
     }
 
@@ -96,6 +97,8 @@ enum ItemActions {
         var minute: Int?
         var weekdays: [Int]
         var targetDate: Date?
+        /// Timed reminders: false = one-time, goes off once and never again.
+        var repeats: Bool
 
         init(of item: Item) {
             title = item.title
@@ -106,6 +109,7 @@ enum ItemActions {
             minute = item.minute
             weekdays = item.weekdaysRaw ?? []
             targetDate = item.targetDate
+            repeats = item.onceAt == nil
         }
 
         /// Whether it can be saved: a title, and a usable schedule.
@@ -132,6 +136,7 @@ enum ItemActions {
             || edit.intervalSeconds != item.intervalSeconds
             || edit.hour != item.hour || edit.minute != item.minute
             || edit.weekdays.sorted() != (item.weekdaysRaw ?? []).sorted()
+            || (edit.kind == .scheduledRoutine && edit.repeats != (item.onceAt == nil))
 
         // The editor only knows plain schedules: a new kind drops the extra rules.
         let kindChanged = edit.kind != item.kind
@@ -155,10 +160,28 @@ enum ItemActions {
             let days = Array(Set(edit.weekdays)).sorted()
             item.weekdaysRaw = (days.isEmpty || days.count == 7) ? nil : days
             item.targetDate = nil
-            // One-time / monthly / yearly / deadline keep their date; a
-            // one-time reminder moves to the new time on its day.
-            if let once = item.onceAt, let hour = edit.hour, let minute = edit.minute {
-                item.onceAt = Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: once) ?? once
+            if item.monthDay == nil, item.dueDate == nil {
+                if edit.repeats {
+                    // Back to repeating: a finished one-time comes back to life.
+                    if item.onceAt != nil {
+                        item.onceAt = nil
+                        item.endedAt = nil
+                        if item.pausedUntil == nil { item.isActive = true }
+                    }
+                } else if scheduleChanged || item.onceAt == nil, let hour = edit.hour, let minute = edit.minute {
+                    // One-time: on its day at the new time if that's still ahead,
+                    // else the next time the clock shows it.
+                    var target = item.onceAt.flatMap {
+                        Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: $0)
+                    }
+                    if target.map({ $0 <= now }) ?? true {
+                        target = Item.nextClockTime(hour: hour, minute: minute, after: now)
+                    }
+                    item.onceAt = target
+                    item.endedAt = nil
+                    item.extrasData = nil
+                    if item.pausedUntil == nil { item.isActive = true }
+                }
             }
             if item.repeatKind != .daily, item.repeatKind != .weekly { item.weekdaysRaw = nil }
         case .goal:

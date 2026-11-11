@@ -137,7 +137,18 @@ Design/, scripts/trace_faces.py  source art + the tracer that generated Faces/Fa
    `PersistedSettings.testing(...)` for settings.
 7. **The panel never steals focus.** It is a non-activating `NSPanel`. Put
    inner screens inside the panel as pages (see `ExpandedPanelView`), not in
-   new windows or sheets.
+   new windows or sheets. Settings is such a page: `PanelRootView` shows
+   `SettingsView` in place of the list (a `.sheet` drew an opaque system
+   background), and `ReminderPanelController.isSettingsOpen` widens the panel
+   to `settingsSize` and keeps it up.
+7b. **A timed reminder repeats only when the text says so.** The parser sets
+   `onceAt` unless it sees every / each / daily / weekdays / plural days
+   ("mondays") / weekly / several named days, or a rule (twice a day, every
+   morning, for 7 days, first monday…). "read book at 10 am" and "gym at 6pm
+   on monday" go off once. A resume or the end of a timed pause goes through
+   `Item.arm(after:)`, which ends a one-time reminder whose moment has passed
+   instead of leaving it active with nothing scheduled. The Edit screen has a
+   Repeat switch (`ItemActions.Edit.repeats`).
 8. **Concurrency.** UI, settings stores and the scheduler are `@MainActor`.
    A default argument must not read main-actor state, because that is a
    compile error with the current compiler.

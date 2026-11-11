@@ -57,10 +57,14 @@ xcrun stapler staple "dist/Remind Me.dmg"
   anything is created:
   - **Repeating routine** — an explicit interval ("every 40 minutes", "every
     3 days") → fires on that interval, repeatedly.
-  - **Scheduled routine** — a clock time ("at 4am", "at seven a.m.") →
-    fires daily by default, or on specific weekdays if named ("every
-    Monday and Wednesday"). A time with no explicit repeat word defaults to
-    daily — that's what the confirmation step is for.
+  - **One-time reminder** — a clock time with no repeat word ("at 10 am",
+    "12 pm read book", "tomorrow at 5pm", "in 10 minutes", "on monday") →
+    goes off once, then is finished. It never comes back the next day.
+  - **Scheduled routine** — a clock time WITH a repeat word ("every day at
+    6am", "daily", "weekdays", "mondays", "every Monday", "weekly", several
+    named days, "every morning", "twice a day") → repeats daily or on those
+    weekdays. Reminders repeat only when the text says so. The Edit screen
+    has a Repeat switch to change it later.
   - **Goal** — no time at all → never alerts, just tracked, with an
     optional target date picked up from phrases like "by Friday" via
     `NSDataDetector`.

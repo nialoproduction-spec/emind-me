@@ -40,6 +40,8 @@ struct EditItemView: View {
     @State private var intervalUnit: IntervalUnit
     @State private var time: Date
     @State private var weekdays: Set<Int>
+    /// Timed reminders: off = goes off once and never again.
+    @State private var repeats: Bool
     @State private var hasTarget: Bool
     @State private var targetDate: Date
     @FocusState private var titleFocused: Bool
@@ -67,6 +69,7 @@ struct EditItemView: View {
         comps.minute = item.minute ?? 0
         _time = State(initialValue: Calendar.current.date(from: comps) ?? .now)
         _weekdays = State(initialValue: Set(item.weekdaysRaw ?? []))
+        _repeats = State(initialValue: item.onceAt == nil)
         _hasTarget = State(initialValue: item.targetDate != nil)
         _targetDate = State(initialValue: item.targetDate ?? Calendar.current.date(byAdding: .day, value: 7, to: .now) ?? .now)
     }
@@ -85,6 +88,7 @@ struct EditItemView: View {
             edit.hour = parts.hour ?? 9
             edit.minute = parts.minute ?? 0
             edit.weekdays = weekdays.sorted()
+            edit.repeats = repeats
         case .goal:
             edit.kind = .goal
             edit.targetDate = hasTarget ? targetDate : nil
@@ -218,14 +222,23 @@ struct EditItemView: View {
                     .datePickerStyle(.field)
                     .labelsHidden()
             }
-            if item.kind == .scheduledRoutine, item.repeatKind != .daily, item.repeatKind != .weekly {
-                // One-time, monthly, yearly, deadline: the date stays; the time can change.
+            if item.kind == .scheduledRoutine, item.monthDay != nil || item.dueDate != nil {
+                // Monthly, yearly, deadline: the date stays; the time can change.
                 Text(item.scheduleSummary)
                     .font(.caption)
                     .foregroundStyle(theme.text.opacity(0.6))
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                weekdayFields
+                Toggle("Repeat", isOn: $repeats)
+                    .foregroundStyle(theme.text)
+                if repeats {
+                    weekdayFields
+                } else {
+                    Text("Goes off once, at the next time the clock shows this. It won't come back.")
+                        .font(.caption)
+                        .foregroundStyle(theme.text.opacity(0.5))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         case .goal:
             Toggle("Target date", isOn: $hasTarget)

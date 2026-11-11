@@ -365,6 +365,7 @@ enum ItemParser {
         // repeating routine.
         var hour: Int?
         var minute: Int?
+        var bareHourAt = false // "at 9" with no am/pm
         if intervalSeconds == nil {
             if let match = clockAtRegex.firstMatch(in: trimmed, range: fullRange) {
                 let hourPhrase = ns.substring(with: match.range(withName: "hour")).lowercased()
@@ -396,6 +397,7 @@ enum ItemParser {
                 if isValidTime, (0...59).contains(parsedMinute) {
                     hour = parsedHour
                     minute = parsedMinute
+                    bareHourAt = !(isPM || isAM)
                     stripRanges.append(match.range)
                 }
             } else if let time = bareClockTime(in: trimmed) {
@@ -409,6 +411,12 @@ enum ItemParser {
                 minute = 0
                 stripRanges.append(match.range)
             }
+        }
+
+        // "tonight at 9" means 9 PM.
+        if bareHourAt, let h = hour, (1...11).contains(h),
+           tonightRegex.firstMatch(in: trimmed, range: fullRange) != nil {
+            hour = h + 12
         }
 
         // Several times: "at 9am and 9pm", "at 8am, 1pm and 8pm".
@@ -453,15 +461,30 @@ enum ItemParser {
             return dated.item
         }
 
-        // 4. Weekday / daily repeat signal.
+        // 4. Weekday / repeat signals. A timed reminder repeats ONLY when the
+        // text says so: "every…", "daily", "weekdays", "mondays", "weekly",
+        // several named days, or a rule like "twice a day" or "every other
+        // friday". A lone "at 10 am" or "on monday at 6pm" goes off once.
         var weekdays = Set<Int>()
+        var repeats = rules.repeats || extras.needsDayScan || extras.anchor != nil
         for matcher in weekdayMatchers {
             for match in matcher.regex.matches(in: trimmed, range: fullRange) {
                 weekdays.formUnion(matcher.weekdays)
                 stripRanges.append(match.range)
+                let word = ns.substring(with: match.range).lowercased()
+                // "daily", "weekdays", "weekends", "mondays" always repeat.
+                if matcher.weekdays.count != 1 || word.hasSuffix("days") { repeats = true }
             }
         }
         weekdays.formUnion(rules.weekdays)
+        if weekdays.count > 1 { repeats = true }
+        if everyWordRegex.firstMatch(in: trimmed, range: fullRange) != nil { repeats = true }
+        if let match = weeklyRegex.firstMatch(in: trimmed, range: fullRange) {
+            // "weekly", "every week": on today's weekday.
+            repeats = true
+            stripRanges.append(match.range)
+            if weekdays.isEmpty { weekdays.insert(calendar.component(.weekday, from: now)) }
+        }
         // "every 2 weeks at 5pm" with no day named: on today's weekday.
         if extras.weekStep != nil, weekdays.isEmpty { weekdays.insert(calendar.component(.weekday, from: now)) }
         if extras.anchor != nil, extras.weekStep == nil, extras.dayStep == nil, weekdays.isEmpty {
@@ -490,12 +513,22 @@ enum ItemParser {
             }
         }
 
+        // A timed reminder that isn't asked to repeat goes off once: on the
+        // one named day, else the next time the clock shows that time.
+        var onceAt: Date?
+        if kind == .scheduledRoutine, !repeats, let hour, let minute {
+            onceAt = oneTimeDate(hour: hour, minute: minute, weekday: weekdays.count == 1 ? weekdays.first : nil,
+                                 now: now, calendar: calendar)
+            weekdays = []
+        }
+
         let title = buildTitle(from: trimmed, stripping: stripRanges)
 
         var result = ParsedItem(
             kind: kind, title: title, intervalSeconds: intervalSeconds,
             hour: hour, minute: minute, weekdays: weekdays, targetDate: targetDate
         )
+        result.onceAt = onceAt
         // Active hours only mean something for an interval; the rest only for a clock time.
         if kind == .repeatingRoutine {
             extras.extraTimes = nil
@@ -512,6 +545,30 @@ enum ItemParser {
     }
 
     // MARK: - Dates
+
+    /// When a one-time reminder at `hour:minute` goes off: on the named
+    /// weekday if there is one, otherwise the next time the clock shows that
+    /// time. Always in the future.
+    static func oneTimeDate(hour: Int, minute: Int, weekday: Int?, now: Date,
+                            calendar: Calendar = .current) -> Date? {
+        if let weekday {
+            for offset in 0..<8 {
+                guard let day = calendar.date(byAdding: .day, value: offset, to: now),
+                      calendar.component(.weekday, from: day) == weekday,
+                      let candidate = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day),
+                      candidate > now else { continue }
+                return candidate
+            }
+        }
+        return Item.nextClockTime(hour: hour, minute: minute, after: now, calendar: calendar)
+    }
+
+    private static let everyWordRegex = try! NSRegularExpression(
+        pattern: #"\b(?:every|each)\b"#, options: [.caseInsensitive])
+
+    /// "weekly", "every week" (a quantity, "every 2 weeks", is an interval).
+    private static let weeklyRegex = try! NSRegularExpression(
+        pattern: #"\bweekly\b|\b(?:every|each)\s+week\b"#, options: [.caseInsensitive])
 
     /// One-time, monthly, yearly and deadline schedules, worked out from the
     /// text (`hour` / `minute`: a clock time already found in it). Nil when
@@ -842,6 +899,9 @@ enum ItemParser {
         var partHour: Int?
         /// "twice a day" = 2.
         var timesPerDay: Int?
+        /// Something here says it repeats ("every morning", "for 7 days",
+        /// "first monday of the month", "twice a day").
+        var repeats = false
     }
 
     static func scheduleRules(in original: String, now: Date, calendar: Calendar) -> ScheduleRules {
@@ -870,6 +930,7 @@ enum ItemParser {
             }
             if let end {
                 rules.extras.endsOn = end.addingTimeInterval(-1)
+                rules.repeats = true
                 blank(match.range)
             }
         }
@@ -881,6 +942,7 @@ enum ItemParser {
                 let day = date.date(now: now, calendar: calendar)
                 if let next = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: day)) {
                     rules.extras.endsOn = next.addingTimeInterval(-1)
+                    rules.repeats = true
                     blank(NSRange(location: match.range.location,
                                   length: match.range.length + date.range.location + date.range.length))
                 }
@@ -933,6 +995,7 @@ enum ItemParser {
             let saysMonth = part(match, "month") != nil
             let saysEvery = part(match, "every") != nil
             rules.weekdays = [weekday]
+            rules.repeats = true
             if nth == 2, saysEvery, !saysMonth {
                 rules.extras.weekStep = 2  // "every second monday" = every other monday
             } else {
@@ -949,6 +1012,7 @@ enum ItemParser {
            let match = everyNWeekdayRegex.firstMatch(in: rules.text, range: full()),
            let n = part(match, "n").flatMap({ Int($0) }), n > 1 {
             rules.extras.weekStep = n
+            rules.repeats = true
             blank(match.range) // the weekday itself is read later
         }
 
@@ -961,6 +1025,7 @@ enum ItemParser {
             else if word.hasPrefix("thrice") || word.hasPrefix("three") || word.hasPrefix("3") { count = 3 }
             else { count = 4 }
             rules.timesPerDay = count
+            rules.repeats = true
             blank(match.range)
         }
 
@@ -968,6 +1033,8 @@ enum ItemParser {
         if let match = partOfDayRegex.firstMatch(in: rules.text, range: full()),
            let word = part(match, "p") ?? part(match, "p2") ?? part(match, "p3") {
             rules.partHour = ["morning": 8, "afternoon": 14, "evening": 19, "night": 21][word]
+            // "every morning", "mornings" repeat; "at night", "in the evening" alone don't.
+            if part(match, "p3") == nil { rules.repeats = true }
             blank(match.range)
         } else if let match = dayPartRegex.firstMatch(in: rules.text, range: full()),
                   let word = part(match, "p") {
@@ -1139,9 +1206,9 @@ enum ItemParser {
             WeekdayMatcher(regex: regex(#"\bevery\s+day\b|\bdaily\b|\beveryday\b"#), weekdays: []),
             WeekdayMatcher(regex: regex(#"\bsun(day)?s?\b"#), weekdays: [1]),
             WeekdayMatcher(regex: regex(#"\bmon(day)?s?\b"#), weekdays: [2]),
-            WeekdayMatcher(regex: regex(#"\btue(s(day)?)?\b"#), weekdays: [3]),
+            WeekdayMatcher(regex: regex(#"\btue(?:s|sday|sdays)?\b"#), weekdays: [3]),
             WeekdayMatcher(regex: regex(#"\bwed(nesday)?s?\b"#), weekdays: [4]),
-            WeekdayMatcher(regex: regex(#"\bthu(r(s(day)?)?)?\b"#), weekdays: [5]),
+            WeekdayMatcher(regex: regex(#"\bthu(?:r|rs|rsday|rsdays)?\b"#), weekdays: [5]),
             WeekdayMatcher(regex: regex(#"\bfri(day)?s?\b"#), weekdays: [6]),
             WeekdayMatcher(regex: regex(#"\bsat(urday)?s?\b"#), weekdays: [7]),
             WeekdayMatcher(regex: regex(#"\bweekdays?\b"#), weekdays: [2, 3, 4, 5, 6]),

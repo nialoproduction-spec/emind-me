@@ -275,7 +275,7 @@ final class ReminderScheduler: ObservableObject {
             if let until = item.pausedUntil, until <= now {
                 item.pausedUntil = nil
                 item.isActive = true
-                item.nextFireDate = item.computeNextFireDate(after: now)
+                item.arm(after: now) // a one-time whose moment passed is over, not revived
                 resumed(item)
             }
         }

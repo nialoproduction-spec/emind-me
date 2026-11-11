@@ -125,7 +125,12 @@ final class ReminderPhrasingTests: XCTestCase {
 
         // Weekdays
         at("call mom every monday at 9am", 9, days: [2]),
-        at("call mom on monday at 9am", 9, days: [2]),
+        at("call mom on monday at 9am", 9, days: [], oneTime: true), // one day named, no "every": once
+        at("call mom at 6pm", 18, days: [], oneTime: true),          // no repeat word: once
+        at("call mom tuesdays at 9am", 9, days: [3]),
+        at("call mom thursdays at 9am", 9, days: [5]),
+        at("review notes at 5pm every week", 17),
+        at("review notes weekly at 5pm", 17),
         at("call mom mondays at 9am", 9, days: [2]),
         at("call mom every mon at 9am", 9, days: [2]),
         at("call mom every tuesday at 9am", 9, days: [3]),
