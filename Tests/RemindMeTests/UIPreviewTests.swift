@@ -495,7 +495,7 @@ final class UIPreviewTests: XCTestCase {
                 }
                 .frame(width: 440, alignment: .topLeading)
                 .padding(16)
-                .background(Flat.background)
+                .background(Color(white: 0.16))
             }
         }
         .padding(12)

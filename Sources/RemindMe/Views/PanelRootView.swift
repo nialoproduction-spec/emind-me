@@ -54,7 +54,12 @@ struct PanelRootView: View {
 
     var body: some View {
         ZStack {
-            background
+            // Settings sits on glass; everything else on the panel's own colour.
+            if showingSettings, controller.isExpanded {
+                GlassBackground(cornerRadius: themeStore.theme.cornerRadius)
+            } else {
+                background
+            }
 
             switch layer {
             case .live(let occurrence):
