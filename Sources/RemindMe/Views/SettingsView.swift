@@ -274,6 +274,7 @@ struct SettingsPage: View {
     @ObservedObject private var renderWatch = AppSettings.renderWatch
     @ObservedObject private var deliveries = DeliveryLog.store
     @ObservedObject private var keyBindings = KeyBindings.store
+    @ObservedObject private var sounds = Chime.settings
     @ObservedObject private var repairs = HealthMonitor.log
     @ObservedObject private var lastCheck = HealthMonitor.lastCheck
     @ObservedObject private var themeStore = ThemeStore.shared
@@ -347,7 +348,24 @@ struct SettingsPage: View {
     // MARK: Reminders
 
     @ViewBuilder private var reminders: some View {
-        GlassGroup(title: "Popup", note: "Reminders have no buttons. Ignore one while you type and it leaves angry.") {
+        GlassGroup(title: "Sounds", note: "Faint, so they don't startle you. The buzz is felt on the trackpad.") {
+            GlassRow(label: "Habit card: soft purr and buzz") {
+                HStack(spacing: 8) {
+                    Button("Try") { Chime.play(.habit) }.glassButton()
+                    Toggle("", isOn: $sounds.value.habit).labelsHidden().toggleStyle(.switch).controlSize(.small)
+                }
+            }
+            GlassRow(label: "Reminder popup: quiet tink") {
+                HStack(spacing: 8) {
+                    Button("Try") { Chime.play(.reminder) }.glassButton()
+                    Toggle("", isOn: $sounds.value.reminder).labelsHidden().toggleStyle(.switch).controlSize(.small)
+                }
+            }
+            GlassRow(label: "Volume", last: true) {
+                slider($sounds.value.volume, in: 0.05...1, label: "\(Int(sounds.value.volume * 100))%")
+            }
+        }
+        GlassGroup(title: "Popup", note: "Reminders have no buttons. After popping up they wait under \"To tick off\" at the bottom of the list until you tick them.") {
             GlassRow(label: "Stays for") {
                 HStack(spacing: 8) {
                     Picker("", selection: $reminderPopup.value.seconds) {
@@ -521,11 +539,21 @@ struct SettingsPage: View {
                     }
                 }
             }
-            GlassRow(label: "Hold to talk", detail: "Hold it on its own to speak a reminder.", last: true) {
-                Picker("", selection: $keyBindings.value.talk) {
-                    ForEach(TalkKey.allCases) { Text($0.title).tag($0) }
+            GlassRow(label: "Talk",
+                     detail: keyBindings.value.talkMode == .doubleTap
+                        ? "Double-press it on its own to speak a reminder; press it once more to stop."
+                        : "Hold it on its own to speak a reminder; let go to stop.",
+                     last: true) {
+                HStack(spacing: 6) {
+                    Picker("", selection: $keyBindings.value.talkMode) {
+                        ForEach(TalkMode.allCases) { Text($0.title).tag($0) }
+                    }
+                    .labelsHidden().pickerStyle(.menu).fixedSize()
+                    Picker("", selection: $keyBindings.value.talk) {
+                        ForEach(TalkKey.allCases) { Text($0.title).tag($0) }
+                    }
+                    .labelsHidden().pickerStyle(.menu).fixedSize()
                 }
-                .labelsHidden().pickerStyle(.menu).fixedSize()
             }
         }
         .opacity(smart.value.globalShortcuts ? 1 : 0.5)
@@ -677,7 +705,7 @@ struct SettingsPage: View {
                     login.value.openAtLogin = LoginItem.isOn
                 }
             })
-            statusRow("Microphone (hold to talk)", ok: microphoneOK,
+            statusRow("Microphone (talk key)", ok: microphoneOK,
                       fix: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
             statusRow("Speech recognition", ok: speechOK,
                       fix: "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition", last: true)

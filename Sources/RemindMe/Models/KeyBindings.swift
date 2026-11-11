@@ -59,7 +59,24 @@ enum TalkKey: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-/// Every shortcut the app listens for. Changed in Settings → Smart.
+/// How the talk key starts listening.
+enum TalkMode: String, Codable, CaseIterable, Identifiable {
+    /// Double-press: two quick taps start listening; one more tap stops.
+    case doubleTap
+    /// Hold: listens while it's held down.
+    case hold
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .doubleTap: "Double-press"
+        case .hold: "Hold"
+        }
+    }
+}
+
+/// Every shortcut the app listens for. Changed in Settings → Shortcuts.
 struct KeyBindings: Codable, Equatable {
     enum Action: String, Codable, CaseIterable, Identifiable {
         case done, snooze, skip, undo
@@ -83,7 +100,32 @@ struct KeyBindings: Codable, Equatable {
     var snooze = KeyBinding.option("S", code: kVK_ANSI_S)
     var skip = KeyBinding.option("K", code: kVK_ANSI_K)
     var undo = KeyBinding.option("Z", code: kVK_ANSI_Z)
-    var talk: TalkKey = .option
+    var talk: TalkKey = .command
+    var talkMode: TalkMode = .doubleTap
+    /// Saved after the switch to double-press ⌘ as the default.
+    var talkV2 = true
+
+    init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case done, snooze, skip, undo, talk, talkMode, talkV2
+    }
+
+    /// Older saves load; the talk key switches once to double-press ⌘ (the
+    /// new default), after that your own choice stays.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = KeyBindings()
+        done = try c.decodeIfPresent(KeyBinding.self, forKey: .done) ?? defaults.done
+        snooze = try c.decodeIfPresent(KeyBinding.self, forKey: .snooze) ?? defaults.snooze
+        skip = try c.decodeIfPresent(KeyBinding.self, forKey: .skip) ?? defaults.skip
+        undo = try c.decodeIfPresent(KeyBinding.self, forKey: .undo) ?? defaults.undo
+        if try c.decodeIfPresent(Bool.self, forKey: .talkV2) == true {
+            talk = try c.decodeIfPresent(TalkKey.self, forKey: .talk) ?? .command
+            talkMode = try c.decodeIfPresent(TalkMode.self, forKey: .talkMode) ?? .doubleTap
+        }
+        talkV2 = true
+    }
 
     subscript(action: Action) -> KeyBinding {
         get {

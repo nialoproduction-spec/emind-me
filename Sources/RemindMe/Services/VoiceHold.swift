@@ -1,8 +1,9 @@
 import AppKit
 
-/// Hold the talk key (Option by default) on its own to talk. The panel opens,
-/// speech fills the add box, and letting go stops listening. Nothing is saved:
-/// the usual preview shows what the reminder will be, and you press Save.
+/// Double-press the talk key (⌘ by default) on its own to talk; tap it once
+/// more to stop. Or, in Hold mode, hold it to talk and let go to stop. The
+/// panel opens and speech fills the add box. Nothing is saved: the usual
+/// preview shows what the reminder will be, and you press Save.
 ///
 /// Watching modifier keys from other apps needs the Input Monitoring permission.
 /// macOS asks for it the first time.
@@ -18,6 +19,8 @@ final class VoiceHold {
     }
 
     private var hold = CommandHold()
+    private var taps = DoubleTap()
+    private var listening = false
     private var monitors: [Any] = []
     private var tick: Task<Void, Never>?
     private var wantsListening = false
@@ -49,11 +52,26 @@ final class VoiceHold {
         switch input {
         case .key:
             hold.otherKeyPressed()
+            taps.otherKeyPressed()
         case .modifiers(let flags):
             // Only the talk key is down: no other modifier, and no key since.
-            let talk = KeyBindings.store.value.talk.flag
-            let onlyTalk = flags.contains(talk)
-                && flags.intersection([.command, .option, .control, .shift, .function]) == talk
+            let bindings = KeyBindings.store.value
+            let talk = bindings.talk.flag
+            let modifiers = flags.intersection([.command, .option, .control, .shift, .function])
+            let onlyTalk = flags.contains(talk) && modifiers == talk
+            if bindings.talkMode == .doubleTap {
+                let event = taps.modifiersChanged(talkOnly: onlyTalk, anyModifier: !modifiers.isEmpty, at: .now)
+                let active = listening || VoiceInput.shared.isListening
+                if active, event != nil {
+                    // One more tap while listening stops it.
+                    taps.reset()
+                    apply(.end)
+                } else if !active, event == .doubleTap {
+                    taps.reset()
+                    apply(.begin)
+                }
+                return
+            }
             if let event = hold.modifiersChanged(commandOnly: onlyTalk, at: .now) {
                 apply(event)
             }
@@ -75,13 +93,18 @@ final class VoiceHold {
         switch event {
         case .begin:
             wantsListening = true
+            listening = true
             VoiceInput.shared.authorise { [weak self] allowed in
                 // Only start if the key is still held when permission comes back.
-                guard allowed, self?.wantsListening == true else { return }
+                guard allowed, self?.wantsListening == true else {
+                    self?.listening = false
+                    return
+                }
                 self?.startRecording()
             }
         case .end:
             wantsListening = false
+            listening = false
             stopRecording()
         }
     }

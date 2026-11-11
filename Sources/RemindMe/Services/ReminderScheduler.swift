@@ -106,6 +106,10 @@ final class ReminderScheduler: ObservableObject {
     private let goalNudgeSettings: PersistedSettings<GoalNudgeSettings>
     /// Shows a small popup (quiet reminders, the goal check-in).
     private let showNotice: @MainActor (NoticeContent) -> Void
+    /// The faint sound for a habit's card or a reminder's popup.
+    private let chime: @MainActor (Chime.Kind) -> Void
+    /// Reminders that popped up and wait for a ✓ at the bottom of the panel.
+    let toTick: PersistedSettings<TickList>
     private let popupSettings: PersistedSettings<ReminderPopupSettings>
     /// What came due while nobody saw it.
     let missed: PersistedSettings<MissedList>
@@ -133,8 +137,12 @@ final class ReminderScheduler: ObservableObject {
         popupSettings: PersistedSettings<ReminderPopupSettings>? = nil,
         missed: PersistedSettings<MissedList>? = nil,
         ignored: PersistedSettings<IgnoreCounts>? = nil,
-        undo: UndoCenter? = nil
+        undo: UndoCenter? = nil,
+        chime: (@MainActor (Chime.Kind) -> Void)? = nil,
+        toTick: PersistedSettings<TickList>? = nil
     ) {
+        self.chime = chime ?? { Chime.play($0) }
+        self.toTick = toTick ?? AppSettings.toTick
         self.presenter = presenter ?? ReminderPanelController.shared
         self.clock = now ?? { Date.now }
         self.shouldSuppress = shouldSuppress ?? { FocusGuard.shouldSuppress() }
@@ -376,6 +384,7 @@ final class ReminderScheduler: ObservableObject {
             DeliveryLog.record(.missed, title: item.title, at: current,
                                detail: late ? "Came due while the Mac was asleep or off" : "Held while away or in full screen")
             missed.value.add(title: item.title, dueAt: dueAt, count: count, detail: detail)
+            toTick.value.add(itemID: item.id, title: item.title, at: dueAt, missed: true)
             return
         }
         var content = Self.popupContent(title: item.title,
@@ -391,6 +400,9 @@ final class ReminderScheduler: ObservableObject {
         }
         DeliveryLog.record(.shown, title: item.title, at: current)
         showNotice(content)
+        chime(.reminder)
+        // It stays at the bottom of the panel until it's ticked.
+        toTick.value.add(itemID: item.id, title: item.title, at: current)
     }
 
     nonisolated static func loudLine(times: Int) -> String {
@@ -583,6 +595,7 @@ final class ReminderScheduler: ObservableObject {
         activeOccurrence = occurrence
         isLiveReminderSuspended = false
         presenter.presentLiveReminder()
+        chime(.habit)
         // No auto-close: it stays until Done, Snooze or Skip.
     }
 
@@ -600,6 +613,7 @@ final class ReminderScheduler: ObservableObject {
         occurrence.nextEscalationAt = current.addingTimeInterval(TimeInterval(escalation.intervalMinutes * 60))
         activeOccurrence = occurrence // re-publish: the menu bar face picks up the new mood
         presenter.presentLiveReminder()
+        chime(.habit)
     }
 
     /// Tuck the waiting reminder away while a Focus / full-screen app is up,

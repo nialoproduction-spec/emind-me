@@ -40,6 +40,7 @@ struct ExpandedPanelView: View {
     @ObservedObject private var draft = PanelDraft.shared
     @ObservedObject private var voice = VoiceInput.shared
     @ObservedObject private var timers = TaskTimers.store
+    @ObservedObject private var tickList = AppSettings.toTick
     @ObservedObject private var smart = AppSettings.smart
     @ObservedObject private var undo = UndoCenter.shared
     @FocusState private var fieldFocused: Bool
@@ -221,7 +222,8 @@ struct ExpandedPanelView: View {
             }
 
             // A running timer counts as content, so the list shows instead of the empty state.
-            if items.isEmpty && BreakCycleManager.shared.config == nil && timers.value.open.isEmpty {
+            if items.isEmpty && BreakCycleManager.shared.config == nil && timers.value.open.isEmpty
+                && tickList.value.entries.isEmpty {
                 emptyState
             } else {
                 list
@@ -318,8 +320,14 @@ struct ExpandedPanelView: View {
                     }
                 }
             }
+            // Reminders that popped up wait here, at the bottom, until ticked.
+            if categoryFilter == nil, !tickList.value.entries.isEmpty {
+                Section("To tick off") {
+                    ForEach(tickList.value.entries) { entry in tickRow(entry) }
+                }
+            }
             if goals.isEmpty && habits.isEmpty && reminders.isEmpty && deadlines.isEmpty && sortedToday.isEmpty
-                && timers.value.open.isEmpty
+                && timers.value.open.isEmpty && tickList.value.entries.isEmpty
                 && (categoryFilter != nil || BreakCycleManager.shared.config == nil) {
                 Text("Nothing in this category yet.")
                     .font(theme.font)
@@ -332,6 +340,65 @@ struct ExpandedPanelView: View {
     }
 
     // MARK: - Rows
+
+    /// A reminder that popped up: the ✓ ticks it off for good.
+    private func tickRow(_ entry: TickList.Entry) -> some View {
+        let item = entry.itemID.flatMap { id in items.first { $0.id == id } }
+        let when = Calendar.current.isDateInToday(entry.at)
+            ? entry.at.formatted(date: .omitted, time: .shortened)
+            : entry.at.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+        return HStack(spacing: 10) {
+            Button { tick(entry) } label: {
+                Image(systemName: "checkmark.circle")
+                    .font(.system(size: theme.fontSize + 4))
+                    .foregroundStyle(theme.accent)
+            }
+            .buttonStyle(.plain)
+            .help("Tick it off")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.title)
+                    .font(theme.font)
+                    .foregroundStyle(theme.text)
+                    .lineLimit(2)
+                Text((entry.missed ? "Missed · " : "Reminded · ") + when)
+                    .font(.system(size: theme.fontSize - 2))
+                    .foregroundStyle(entry.missed ? Color.red.opacity(0.85) : theme.text.opacity(0.5))
+            }
+            Spacer(minLength: 4)
+        }
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .listRowBackground(Color.clear)
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            Button { tick(entry) } label: { Label("Tick", systemImage: "checkmark") }
+                .tint(.green)
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if let item {
+                Button { pendingDeletion = .item(item) } label: { Label("Delete", systemImage: "trash") }
+                    .tint(.red)
+                Button { editing = item } label: { Label("Edit", systemImage: "pencil") }
+                    .tint(.gray)
+            } else {
+                Button { tickList.value.tick(entry.id) } label: { Label("Remove", systemImage: "xmark") }
+                    .tint(.gray)
+            }
+        }
+        .contextMenu {
+            Button("Tick off") { tick(entry) }
+            if let item {
+                Button("Edit reminder…") { editing = item }
+                Button("Delete reminder…", role: .destructive) { pendingDeletion = .item(item) }
+            }
+            Divider()
+            Button("Remove from this list") { tickList.value.tick(entry.id) }
+        }
+    }
+
+    private func tick(_ entry: TickList.Entry) {
+        withAnimation(.easeOut(duration: 0.2)) { tickList.value.tick(entry.id) }
+        DeliveryLog.record(.acknowledged, title: entry.title, at: .now, detail: "Ticked off")
+    }
 
     private func itemRow(_ item: Item) -> some View {
         ReminderRowView(
@@ -597,7 +664,9 @@ struct ExpandedPanelView: View {
                 Image(systemName: "mic.fill")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.red)
-                    .help("Listening. Let go of the talk key to stop.")
+                    .help(KeyBindings.store.value.talkMode == .doubleTap
+                          ? "Listening. Press the talk key once to stop."
+                          : "Listening. Let go of the talk key to stop.")
             }
             TextField(voice.isListening ? "Listening…" : "Drink water every 40 min", text: $draft.text)
                 .textFieldStyle(.plain)
@@ -767,13 +836,40 @@ struct BreakTimerSection: View {
     let theme: PanelTheme
     @ObservedObject private var breaks = BreakCycleManager.shared
     @ObservedObject private var settings = AppSettings.breakTimer
+    @State private var editing = false
+    @State private var workMinutes = 40
+    @State private var breakMinutes = 10
 
     var body: some View {
         if let config = breaks.config {
             Section("Break timer") {
-                row(config, running: breaks.state)
+                if editing { editor } else { row(config, running: breaks.state) }
             }
         }
+    }
+
+    /// Edit: new work and break lengths; it starts again with them.
+    private var editor: some View {
+        HStack(spacing: 8) {
+            Stepper("Work \(workMinutes) min", value: $workMinutes, in: 1...240).fixedSize()
+            Stepper("Break \(breakMinutes) min", value: $breakMinutes, in: 1...120).fixedSize()
+            Spacer(minLength: 4)
+            Button("Save") {
+                breaks.startCycle(BreakCycleConfig(workMinutes: workMinutes, breakMinutes: breakMinutes))
+                editing = false
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel") { editing = false }
+        }
+        .controlSize(.small)
+        .foregroundStyle(theme.text)
+        .listRowBackground(Color.clear)
+    }
+
+    private func startEditing(_ config: BreakCycleConfig) {
+        workMinutes = max(1, config.workSeconds / 60)
+        breakMinutes = max(1, config.breakSeconds / 60)
+        editing = true
     }
 
     private func row(_ config: BreakCycleConfig, running: BreakCycleState?) -> some View {
@@ -832,8 +928,11 @@ struct BreakTimerSection: View {
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button { breaks.remove() } label: { Label("Delete", systemImage: "trash") }
                 .tint(.red)
+            Button { startEditing(config) } label: { Label("Edit", systemImage: "pencil") }
+                .tint(.gray)
         }
         .contextMenu {
+            Button("Edit…") { startEditing(config) }
             if running != nil {
                 Button("Turn off") { breaks.stop() }
                 Button("Start over") { breaks.resume() }

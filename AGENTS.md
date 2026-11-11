@@ -189,7 +189,12 @@ Design/, scripts/trace_faces.py  source art + the tracer that generated Faces/Fa
   Answering resets it.
 - Rows show "N total" and "N days in a row". A habit card has three buttons only: Done, Snooze
   (shortest length; right-click for the others), Skip.
-- All sounds are off. Don't add any.
+- Sounds are faint and optional (`Chime`, Settings → Reminders → Sounds): a habit card plays "Purr" with a trackpad
+  buzz, a reminder popup a quiet "Tink". Nothing plays outside the app bundle (tests, previews). Add no others.
+- A reminder popup also goes on `AppSettings.toTick` (`TickList`): "To tick off" at the bottom of the list, with a ✓,
+  until ticked; missed ones too. Deleting the reminder forgets its entry.
+- Talk: double-press ⌘ (default, `TalkMode.doubleTap`, `DoubleTap`) starts listening, one more tap stops; or Hold mode.
+- Every row has Edit and Delete (right-click or swipe), including task timers and the break timer.
 - Enter saves at once.
 - The break timer is listed in its own "Break timer" section (`BreakTimerSection`): `stop()` greys it
   out but keeps `config`, `resume()` restarts it, `remove()` forgets it. Lengths are in seconds.

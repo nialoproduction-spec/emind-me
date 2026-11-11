@@ -83,6 +83,30 @@ struct TaskTimers: Codable, Equatable {
         entries[next].startedAt = now
     }
 
+    /// Edit: a new name and length. A running timer keeps its start, so the
+    /// time left changes by the difference; one that was up starts counting again.
+    mutating func update(_ id: UUID, title: String, seconds: Double, now: Date = .now) {
+        guard let index = entries.firstIndex(where: { $0.id == id }), seconds > 0 else { return }
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty { entries[index].title = name }
+        entries[index].seconds = seconds
+        if entries[index].state == .asking || entries[index].state == .overdue,
+           entries[index].endsAt > now {
+            entries[index].state = .running
+            entries[index].askedAt = nil
+            entries[index].overdueAt = nil
+        }
+    }
+
+    /// Delete: it's gone; if it was the one running, the next one starts.
+    mutating func remove(_ id: UUID, now: Date = .now) {
+        let wasCurrent = current?.id == id
+        entries.removeAll { $0.id == id }
+        guard wasCurrent, let next = entries.lastIndex(where: { $0.state == .queued }) else { return }
+        entries[next].state = .running
+        entries[next].startedAt = now
+    }
+
     /// "Not yet": it keeps counting on, now in red.
     mutating func notYet(_ id: UUID, now: Date = .now) {
         guard let index = entries.firstIndex(where: { $0.id == id }), entries[index].state != .done else { return }
@@ -124,6 +148,20 @@ struct TaskTimers: Codable, Equatable {
         timers.markDone(id, now: .now)
         store.value = timers
         DeliveryLog.record(.unfinished, title: title, at: .now, detail: "Skipped")
+    }
+
+    @MainActor
+    static func update(_ id: UUID, title: String, seconds: Double) {
+        var timers = store.value
+        timers.update(id, title: title, seconds: seconds)
+        store.value = timers
+    }
+
+    @MainActor
+    static func remove(_ id: UUID) {
+        var timers = store.value
+        timers.remove(id)
+        store.value = timers
     }
 
     @MainActor

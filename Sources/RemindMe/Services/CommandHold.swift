@@ -40,3 +40,54 @@ struct CommandHold {
         if !isHolding { armedAt = nil }
     }
 }
+
+/// Decides when the talk key is *double-pressed* on its own: two quick taps
+/// with nothing else in between. Pure logic, tested with plain dates.
+struct DoubleTap {
+    enum Event: Equatable { case tap, doubleTap }
+
+    /// A tap is a press shorter than this.
+    static let maxPress: TimeInterval = 0.35
+    /// The second tap has to start within this of the first one ending.
+    static let maxGap: TimeInterval = 0.45
+
+    private(set) var downAt: Date?
+    private(set) var lastTapAt: Date?
+    private var interrupted = false
+
+    /// Call on every modifier change. `talkOnly`: the talk key is down and no
+    /// other modifier is. `anyModifier`: any modifier at all is down.
+    mutating func modifiersChanged(talkOnly: Bool, anyModifier: Bool, at now: Date) -> Event? {
+        if talkOnly {
+            if downAt == nil {
+                downAt = now
+                interrupted = false
+            }
+            return nil
+        }
+        guard let down = downAt else { return nil }
+        downAt = nil
+        // Another modifier joined (⌘⇧…), a key was pressed, or it was held: not a tap.
+        if anyModifier || interrupted || now.timeIntervalSince(down) > Self.maxPress {
+            lastTapAt = nil
+            return nil
+        }
+        if let last = lastTapAt, down.timeIntervalSince(last) <= Self.maxGap {
+            lastTapAt = nil
+            return .doubleTap
+        }
+        lastTapAt = now
+        return .tap
+    }
+
+    /// Any other key (⌘C) means it was a shortcut, not a tap.
+    mutating func otherKeyPressed() {
+        interrupted = true
+        lastTapAt = nil
+    }
+
+    /// Start fresh (after listening starts or stops).
+    mutating func reset() {
+        lastTapAt = nil
+    }
+}

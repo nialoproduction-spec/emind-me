@@ -38,6 +38,7 @@ enum ItemDeletion {
             }
         }
         (cancelNotifications ?? { NotificationService.shared.cancel(for: $0) })(item)
+        scheduler.toTick.value.forget(itemID: item.id)
 
         if scheduler.closeLiveReminder(belongingTo: item) {
             // Its card is fading out: let it finish before the data goes, so
